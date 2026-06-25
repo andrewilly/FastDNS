@@ -633,20 +633,224 @@ async fn run_diagnostic_query_dot(name: &str, rtype_str: &str) {
 // Service management (cross-platform)
 // ---------------------------------------------------------------
 
+/// Check if FastDNS is already running (macOS).
+#[cfg(target_os = "macos")]
+fn is_fastdns_running() -> bool {
+    std::process::Command::new("pgrep")
+        .args(["-x", "fastdns"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Check if a launchd service is loaded.
+#[cfg(target_os = "macos")]
+fn is_launchd_service_loaded(label: &str) -> bool {
+    std::process::Command::new("launchctl")
+        .args(["print", &format!("system/{}", label)])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Fully clean an existing installation before re-installing.
+#[cfg(target_os = "macos")]
+fn clean_old_installation() {
+    let plist_daemon = "/Library/LaunchDaemons/com.fastdns.daemon.plist";
+    let plist_health = "/Library/LaunchDaemons/com.fastdns.healthcheck.plist";
+    let binary = "/usr/local/bin/fastdns";
+
+    let was_running = is_fastdns_running();
+    let was_loaded = is_launchd_service_loaded("com.fastdns.daemon");
+
+    if !was_running && !was_loaded && !std::path::Path::new(binary).exists() {
+        println!("   ✅ Nessuna installazione precedente trovata.");
+        return;
+    }
+
+    println!("🧹 Rimuovo installazione precedente...");
+
+    // 1. Kill any running fastdns process
+    if was_running {
+        println!("   ⛔ FastDNS è in esecuzione (PID {}), lo fermo...",
+            std::process::Command::new("pgrep")
+                .args(["-x", "fastdns"])
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                .unwrap_or_default());
+        let _ = std::process::Command::new("pkill")
+            .args(["-9", "fastdns"])
+            .status();
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+
+    // 2. Unload launchd plists
+    for plist in [plist_daemon, plist_health] {
+        if std::path::Path::new(plist).exists() {
+            println!("   🛑 Scarico {}", plist);
+            let _ = std::process::Command::new("launchctl")
+                .args(["unload", plist])
+                .status();
+            std::thread::sleep(std::time::Duration::from_millis(300));
+        }
+    }
+
+    // 3. Remove plist files
+    for plist in [plist_daemon, plist_health] {
+        if std::path::Path::new(plist).exists() {
+            println!("   🗑️  Rimuovo {}", plist);
+            let _ = std::fs::remove_file(plist);
+        }
+    }
+
+    // 4. Remove binary
+    if std::path::Path::new(binary).exists() {
+        println!("   🗑️  Rimuovo {}", binary);
+        let _ = std::fs::remove_file(binary);
+    }
+
+    // 5. Reset system DNS back to DHCP (router)
+    println!("   🔄 Ripristino DNS di sistema...");
+    let _ = std::process::Command::new("networksetup")
+        .args(["-setdnsservers", "Wi-Fi", "empty"])
+        .status();
+    let _ = std::process::Command::new("networksetup")
+        .args(["-setdnsservers", "Ethernet", "empty"])
+        .status();
+    let _ = std::process::Command::new("dscacheutil")
+        .args(["-flushcache"])
+        .status();
+    let _ = std::process::Command::new("killall")
+        .args(["-HUP", "mDNSResponder"])
+        .status();
+
+    println!("   ✅ Vecchia installazione rimossa.");
+    std::thread::sleep(std::time::Duration::from_secs(1));
+}
+
 /// Install FastDNS as a system service.
 fn install_service_route() {
     #[cfg(target_os = "macos")]
     {
-        println!("📦 Installing FastDNS as macOS launchd daemon...");
-        let status = std::process::Command::new("sudo")
-            .args(["bash", "scripts/macos/install.sh"])
-            .status();
+        use std::os::unix::fs::PermissionsExt;
 
-        match status {
-            Ok(s) if s.success() => println!("✅ FastDNS installed as macOS daemon."),
-            Ok(_) => eprintln!("❌ Installation failed. Run: sudo bash scripts/macos/install.sh"),
-            Err(e) => eprintln!("❌ Failed to run installer: {}. Run: sudo bash scripts/macos/install.sh", e),
+        println!("╔══════════════════════════════════════════╗");
+        println!("║   🚀 FastDNS macOS Installer             ║");
+        println!("╚══════════════════════════════════════════╝");
+        println!("");
+
+        // ── FASE 0: Cleanup ────────────────────────────
+        clean_old_installation();
+        println!("");
+
+        // ── FASE 1: Copia binario ──────────────────────
+        let binary_path = std::env::current_exe()
+            .unwrap_or_else(|_| "target/release/fastdns".into());
+        let install_dir = "/usr/local/bin";
+        let installed_binary = format!("{}/fastdns", install_dir);
+
+        println!("📋 Copio il binario in {}...", installed_binary);
+        std::fs::create_dir_all(install_dir).ok();
+        match std::fs::copy(&binary_path, &installed_binary) {
+            Ok(_) => {
+                std::fs::set_permissions(&installed_binary,
+                    std::fs::Permissions::from_mode(0o755)).ok();
+                println!("   ✅ Binario installato: {}", installed_binary);
+            }
+            Err(e) => {
+                eprintln!("   ❌ Errore copia binario: {}", e);
+                return;
+            }
         }
+        println!("");
+
+        // ── FASE 2: Copia plist ────────────────────────
+        let plist_src = "scripts/macos/com.fastdns.daemon.plist";
+        let plist_dst = "/Library/LaunchDaemons/com.fastdns.daemon.plist";
+
+        println!("📋 Installo launchd plist...");
+        match std::fs::copy(plist_src, plist_dst) {
+            Ok(_) => {
+                std::fs::set_permissions(plist_dst,
+                    std::fs::Permissions::from_mode(0o644)).ok();
+                println!("   ✅ Plist installato: {}", plist_dst);
+            }
+            Err(e) => {
+                eprintln!("   ❌ Errore copia plist: {}", e);
+                return;
+            }
+        }
+        println!("");
+
+        // ── FASE 3: Carica daemon ──────────────────────
+        println!("📋 Carico il daemon via launchctl...");
+        let load_status = std::process::Command::new("launchctl")
+            .args(["load", "-w", plist_dst])
+            .status();
+        match load_status {
+            Ok(s) if s.success() => println!("   ✅ Daemon caricato correttamente."),
+            _ => {
+                eprintln!("   ⚠️  launchctl load fallito (SIP su macOS 15+). Provo osascript...");
+                let _ = std::process::Command::new("osascript")
+                    .args(["-e", &format!(
+                        "do shell script \"launchctl load -w {}\" with administrator privileges",
+                        plist_dst)])
+                    .status();
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                // Verifica se è partito
+                if is_launchd_service_loaded("com.fastdns.daemon") {
+                    println!("   ✅ Daemon caricato (via osascript fallback).");
+                } else {
+                    eprintln!("   ❌ Impossibile caricare il daemon. Verifica SIP o esegui manualmente:");
+                    eprintln!("      sudo launchctl load -w {}", plist_dst);
+                }
+            }
+        }
+        println!("");
+
+        // ── FASE 4: Attendi bind ───────────────────────
+        println!("⏳ Attendo l'avvio del demone...");
+        std::thread::sleep(std::time::Duration::from_secs(3));
+
+        // ── FASE 5: Imposta DNS sistema ────────────────
+        println!("📋 Imposto DNS di sistema su 127.0.0.1...");
+        match crate::system_dns::set_system_dns("127.0.0.1") {
+            Ok(()) => println!("   ✅ DNS di sistema impostato a 127.0.0.1"),
+            Err(e) => {
+                eprintln!("   ⚠️  {} ", e);
+                eprintln!("   Per impostare manualmente: sudo networksetup -setdnsservers Wi-Fi 127.0.0.1");
+            }
+        }
+        println!("   Per revert: sudo networksetup -setdnsservers Wi-Fi empty");
+        println!("");
+
+        // ── FASE 6: Verifica ────────────────────────────
+        println!("📋 Verifico la risoluzione DNS...");
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        let output = std::process::Command::new("dig")
+            .args(["@127.0.0.1", "google.com", "+short", "+timeout=3"])
+            .output();
+        match output {
+            Ok(out) if out.status.success() => {
+                let ips = String::from_utf8_lossy(&out.stdout);
+                let ips: Vec<&str> = ips.lines().filter(|l| !l.is_empty()).collect();
+                if !ips.is_empty() {
+                    println!("   ✅ Risoluzione OK: google.com → {}", ips.join(", "));
+                } else {
+                    eprintln!("   ⚠️  dig non ha restituito IP. Il demone potrebbe aver bisogno di più tempo.");
+                }
+            }
+            _ => {
+                eprintln!("   ⚠️  Verifica fallita. Il demone potrebbe essere ancora in fase di avvio.");
+                eprintln!("   Controlla con: dig @127.0.0.1 google.com");
+                eprintln!("                 launchctl print system/com.fastdns.daemon");
+            }
+        }
+        println!("");
+
+        println!("╔══════════════════════════════════════════╗");
+        println!("║   ✅ FastDNS installato con successo!   ║");
+        println!("╚══════════════════════════════════════════╝");
     }
 
     #[cfg(target_os = "windows")]
@@ -657,6 +861,19 @@ fn install_service_route() {
             .unwrap_or_else(|_| "fastdns.exe".to_string());
         let bin_path = format!("\"{}\" -b 127.0.0.1:53 -c 250000 --dnssec", exe_path);
 
+        // Clean: remove old service if exists
+        println!("📋 Removing previous FastDNS service (if any)...");
+        let _ = std::process::Command::new("sc")
+            .args(["stop", "FastDNS"])
+            .status();
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        let _ = std::process::Command::new("sc")
+            .args(["delete", "FastDNS"])
+            .status();
+        std::thread::sleep(std::time::Duration::from_millis(500));
+
+        // Create new service
+        println!("📋 Creating new FastDNS service...");
         let status = std::process::Command::new("sc")
             .args(["create", "FastDNS", "binPath=", &bin_path, "start=", "auto",
                    "DisplayName=", "FastDNS Recursive Resolver", "type=", "own", "error=", "normal"])
@@ -665,7 +882,11 @@ fn install_service_route() {
         match status {
             Ok(s) if s.success() => {
                 println!("✅ Windows service 'FastDNS' created.");
-                println!("   Start it with: sc start FastDNS");
+                println!("   Starting service...");
+                let _ = std::process::Command::new("sc")
+                    .args(["start", "FastDNS"])
+                    .status();
+                println!("   ✅ Service started.");
             }
             Ok(_) => eprintln!("❌ Service creation failed. Run as Administrator."),
             Err(e) => eprintln!("❌ sc.exe not found: {}. Run as Administrator.", e),
