@@ -785,53 +785,44 @@ fn install_service_route() {
         // ── FASE 3: Carica daemon ──────────────────────
         println!("📋 Carico il daemon via launchctl...");
 
-        // Su macOS 15+ con SIP, `launchctl load -w` fallisce con EIO 5 (Input/output error).
-        // Prima di fare bootstrap, rimuoviamo eventuali servizi preesistenti con bootout:
-        let _ = std::process::Command::new("launchctl")
-            .args(["bootout", "system", plist_dst])
-            .status();
-        std::thread::sleep(std::time::Duration::from_millis(300));
-        // Il comando corretto è `launchctl bootstrap system` (richiesto da SIP):
-        let bootstrap_status = std::process::Command::new("launchctl")
-            .args(["bootstrap", "system", plist_dst])
-            .status();
+        // Su macOS 15+ con SIP, `launchctl load -w` da terminale fallisce con EIO 5.
+        // Il metodo che funziona sempre è osascript, che apre un popup di autenticazione GUI
+        // e lancia launchctl con le giuste entitlement di sistema.
+        //
+        // Tentativo 1: launchctl load -w diretto (funziona su macOS pre-15 o SIP ridotto)
+        let mut loaded = false;
 
-        let loaded = match bootstrap_status {
-            Ok(s) if s.success() => {
-                println!("   ✅ Daemon registrato via launchctl bootstrap.");
-                true
-            }
-            _ => {
-                // Fallback per macOS pre-15: prova con load -w
-                eprintln!("   ⚠️  bootstrap fallito. Provo launchctl load -w...");
-                let _ = std::process::Command::new("launchctl")
-                    .args(["load", "-w", plist_dst])
-                    .status();
-                std::thread::sleep(std::time::Duration::from_secs(1));
-                is_launchd_service_loaded("com.fastdns.daemon")
-            }
-        };
+        if let Ok(s) = std::process::Command::new("launchctl")
+            .args(["load", "-w", plist_dst])
+            .status()
+        {
+            loaded = s.success();
+        }
 
-        // Verifica finale
-        if loaded {
+        if !loaded {
+            // Tentativo 2: osascript → apre finestra di autenticazione GUI
+            println!("   ⚠️  Richiesta autenticazione aggiuntiva (SIP su macOS 15+).");
+            println!("   🔑 Apparirà una finestra: inserisci la password di amministratore.");
+            std::thread::sleep(std::time::Duration::from_secs(1));
+
+            if let Ok(s) = std::process::Command::new("osascript")
+                .args(["-e", &format!(
+                    "do shell script \"launchctl load -w {}\" with administrator privileges",
+                    plist_dst)])
+                .status()
+            {
+                loaded = s.success();
+            }
+            std::thread::sleep(std::time::Duration::from_secs(2));
+        }
+
+        // Verifica con launchctl print
+        if loaded || is_launchd_service_loaded("com.fastdns.daemon") {
             println!("   ✅ Daemon caricato correttamente.");
         } else {
-            // Ultimo tentativo: osascript (richiede GUI)
-            eprintln!("   ⚠️  launchctl non disponibile. Provo osascript...");
-            let _ = std::process::Command::new("osascript")
-                .args(["-e", &format!(
-                    "do shell script \"launchctl bootstrap system {}\" with administrator privileges",
-                    plist_dst)])
-                .status();
-            std::thread::sleep(std::time::Duration::from_secs(2));
-
-            if is_launchd_service_loaded("com.fastdns.daemon") {
-                println!("   ✅ Daemon caricato (via osascript).");
-            } else {
-                eprintln!("   ❌ Impossibile caricare il daemon. Prova manualmente:");
-                eprintln!("      sudo launchctl bootstrap system {}", plist_dst);
-                eprintln!("   Il servizio potrebbe funzionare solo dopo un reboot con SIP ridotta.");
-            }
+            eprintln!("   ❌ Impossibile caricare il daemon. Prova manualmente:");
+            eprintln!("      launchctl load -w {}", plist_dst);
+            eprintln!("   Se il problema persiste, potrebbe servire un riavvio.");
         }
         println!("");
 
