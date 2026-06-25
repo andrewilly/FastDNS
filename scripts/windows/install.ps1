@@ -3,272 +3,204 @@
     FastDNS Windows Service Installer
 .DESCRIPTION
     Installs FastDNS as a Windows service with upstream, DoH, DNSSEC.
-    Removes any existing installation first, verifies everything works.
-    Run as Administrator: powershell -ExecutionPolicy Bypass .\scripts\windows\install.ps1
+    Removes any existing installation, verifies everything works.
+    Run as Administrator.
 .PARAMETER BinaryPath
     Path to fastdns.exe (default: .\target\release\fastdns.exe)
-.PARAMETER Upstream
-    Upstream DNS server (default: 8.8.8.8:53)
-.PARAMETER Doh
-    Use DNS-over-HTTPS for upstream (default: true)
-.PARAMETER Dnssec
-    Enable DNSSEC validation (default: true)
-.PARAMETER NoUpstream
-    Skip upstream, use recursive resolution
 #>
 
-param(
-    [string]$BinaryPath = ".\target\release\fastdns.exe",
-    [string]$Upstream = "8.8.8.8:53",
-    [switch]$Doh = $true,
-    [switch]$Dnssec = $true,
-    [switch]$NoUpstream = $false
-)
+param([string]$BinaryPath = ".\target\release\fastdns.exe")
 
-$ServiceName = "FastDNS"
-$DisplayName = "FastDNS Recursive Resolver"
-$LogFile = "$env:ProgramData\FastDNS\install.log"
+$svc  = "FastDNS"
+$log  = "$env:ProgramData\FastDNS\install.log"
+$null = New-Item -ItemType Directory -Path "$env:ProgramData\FastDNS" -Force -ErrorAction 0
 
-# Ensure log directory
-$null = New-Item -ItemType Directory -Path "$env:ProgramData\FastDNS" -Force -ErrorAction SilentlyContinue
-
-function Write-Log {
-    param([string]$Message, [string]$Color = "White")
-    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    $line = "[$timestamp] $Message"
-    try { Write-Host $line -ForegroundColor ([ConsoleColor]::$Color) } catch { Write-Host $line }
-    Add-Content -Path $LogFile -Value $line
+function log {
+    param($m, $c = "White")
+    $t = Get-Date -Format "HH:mm:ss"
+    $l = "[$t] $m"
+    try { Write-Host $l -ForegroundColor $c } catch { Write-Host $l }
+    Add-Content -Path $log -Value $l
 }
 
-function Test-Administrator {
-    $id = [Security.Principal.WindowsIdentity]::GetCurrent()
-    $principal = [Security.Principal.WindowsPrincipal]::new($id)
-    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+function isAdmin {
+    [Security.Principal.WindowsPrincipal]::new(
+        [Security.Principal.WindowsIdentity]::GetCurrent()
+    ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
-# ═══════════════════════════════════════════
 Clear-Host
 Write-Host "╔══════════════════════════════════════════╗" -ForegroundColor Cyan
 Write-Host "║   🚀 FastDNS Windows Service Installer   ║" -ForegroundColor Cyan
 Write-Host "╚══════════════════════════════════════════╝" -ForegroundColor Cyan
 Write-Host ""
 
-# ── Admin check ───────────────────────────────
-if (-not (Test-Administrator)) {
-    Write-Log "❌ Eseguire come Administrator!" "Red"
-    Write-Log "   Tasto destro su PowerShell → Esegui come amministratore" "Yellow"
-    pause; exit 1
-}
-Write-Log "✅ Esecuzione come Administrator" "Green"
-Write-Log ""
+if (-not (isAdmin)) { log "❌ Eseguire come Administrator!" "Red"; pause; exit 1 }
+log "✅ Administrator" "Green"
+log ""
 
-# ── FASE 1: Rimozione vecchia installazione ────
-Write-Log "═══════ FASE 1: Rimozione servizio esistente ═══════" "Cyan"
-Write-Log ""
+# ══════════ FASE 1: Pulisci installazione esistente ══════════
+log "═══ FASE 1: Pulizia installazione esistente ═══" "Cyan"
+log ""
 
-$svcExisting = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
-$procExisting = $null
-try { $procExisting = Get-Process -Name "fastdns" -ErrorAction Stop } catch {}
+$oldSvc = Get-Service $svc -ErrorAction 0
+$oldProc = $null; try { $oldProc = Get-Process fastdns -ErrorAction Stop } catch {}
 
-if ($svcExisting -or $procExisting) {
-    Write-Log "🧹 Rimozione installazione precedente..." "Yellow"
-
-    # Ferma servizio
-    if ($svcExisting -and (Get-Service $ServiceName -ErrorAction SilentlyContinue).Status -eq "Running") {
-        Write-Log "   ⛔ Fermo servizio..." "Yellow"
-        Stop-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue
-        Start-Sleep -Seconds 2
+if ($oldSvc -or $oldProc) {
+    log "🧹 Rimozione..." "Yellow"
+    if ($oldSvc) {
+        if ((Get-Service $svc -ErrorAction 0).Status -eq "Running") {
+            log "   ⛔ Fermo servizio..." "Yellow"
+            Stop-Service $svc -Force -ErrorAction 0; Start-Sleep 2
+        }
+        log "   🗑️  Cancello servizio..." "Yellow"
+        sc.exe delete $svc 2>$null; Start-Sleep 2
     }
-
-    # Cancella servizio
-    if ($svcExisting) {
-        Write-Log "   🗑️  Cancello servizio..." "Yellow"
-        & sc.exe delete $ServiceName 2>$null
-        Start-Sleep -Seconds 2
-    }
-
-    # Kill processi residui
     for ($i = 0; $i -lt 5; $i++) {
-        $p = $null
-        try { $p = Get-Process -Name "fastdns" -ErrorAction Stop } catch {}
+        $p = $null; try { $p = Get-Process fastdns -ErrorAction Stop } catch {}
         if (-not $p) { break }
-        Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
-        Start-Sleep -Seconds 1
+        Stop-Process $p.Id -Force -ErrorAction 0; Start-Sleep 1
     }
-
-    # Reset DNS
-    Write-Log "   🔄 Ripristino DNS..." "Yellow"
-    Get-NetAdapter -ErrorAction SilentlyContinue | ForEach-Object {
-        Set-DnsClientServerAddress -InterfaceIndex $_.InterfaceIndex -ResetServerAddresses -ErrorAction SilentlyContinue
+    log "   🔄 Reset DNS..." "Yellow"
+    Get-NetAdapter -ErrorAction 0 | ForEach-Object {
+        Set-DnsClientServerAddress $_.InterfaceIndex -ResetServerAddresses -ErrorAction 0
     }
-    Write-Log "✅ Rimozione completata." "Green"
+    log "✅ Fatto." "Green"
 } else {
-    Write-Log "✅ Nessuna installazione precedente." "Green"
+    log "✅ Nessuna installazione precedente." "Green"
 }
-Write-Log ""
+log ""
 
-# ── FASE 2: Verifica eseguibile ──────────────
-Write-Log "═══════ FASE 2: Verifica eseguibile ═══════" "Cyan"
-Write-Log ""
+# ══════════ FASE 2: Trova binario ══════════
+log "═══ FASE 2: Verifica eseguibile ═══" "Cyan"
+log ""
 
-$fullPath = Resolve-Path $BinaryPath -ErrorAction SilentlyContinue
+$fullPath = Resolve-Path $BinaryPath -ErrorAction 0
 if (-not $fullPath) {
-    Write-Log "❌ File non trovato: $BinaryPath" "Red"
-    Write-Log "   Compila: cargo build --release" "Yellow"
-    pause; exit 1
+    log "❌ File non trovato: $BinaryPath" "Red"
+    log "   Compila: cargo build --release" "Yellow"; pause; exit 1
 }
 $BinaryPath = $fullPath.Path
-Write-Log "✅ Trovato: $BinaryPath" "Green"
+log "✅ $BinaryPath" "Green"
 
 try {
     $ver = & $BinaryPath --version 2>&1
-    Write-Log "   Versione: $($ver -join '')" "Green"
-} catch { Write-Log "   ⚠️  Versione non disponibile" "Yellow" }
-Write-Log ""
+    log "   Versione: $($ver -join '')" "Green"
+} catch { log "   ⚠️  Versione non disponibile" "Yellow" }
+log ""
 
-# ── FASE 3: Installazione servizio ────────────
-Write-Log "═══════ FASE 3: Installazione servizio ═══════" "Cyan"
-Write-Log ""
+# ══════════ FASE 3: Crea servizio ══════════
+log "═══ FASE 3: Creazione servizio ═══" "Cyan"
+log ""
 
-# Costruisci binPath per sc.exe (formato: "eseguibile" --arg1 --arg2)
-$argParts = @()
-$argParts += "`"$BinaryPath`""
-$argParts += "-b 127.0.0.1:53"
-$argParts += "-c 250000"
-if ($Dnssec) { $argParts += "--dnssec" }
-if (-not $NoUpstream) {
-    $argParts += "--upstream $Upstream"
-    if ($Doh) { $argParts += "--doh" }
+# binPath per sc: "eseguibile" --arg1 --arg2 ...
+$cmd = "`"$BinaryPath`" -b 127.0.0.1:53 -c 250000 --dnssec --upstream 8.8.8.8:53 --doh"
+
+log "📋 Creazione servizio Windows..." "Yellow"
+log "   Nome:    $svc" "White"
+log "   BinPath: $cmd" "White"
+
+sc.exe create $svc binPath= $cmd start= auto DisplayName= "FastDNS Recursive Resolver" type= own error= normal 2>$null
+if ($LASTEXITCODE -ne 0) {
+    log "❌ Creazione fallita (codice: $LASTEXITCODE)." "Red"
+    log "   Eseguire come Administrator." "Yellow"; pause; exit 1
 }
-$binPath = ($argParts -join " ")
+log "   ✅ Servizio creato." "Green"
 
-Write-Log "📋 Creazione servizio..." "Yellow"
-Write-Log "   Nome:    $ServiceName" "White"
-Write-Log "   BinPath: $binPath" "White"
+sc.exe failure $svc reset= 86400 actions= restart/5000/restart/10000/restart/30000 2>$null
+sc.exe failureflag $svc 1 2>$null
+log "   ✅ Riavvio automatico configurato." "Green"
+log ""
 
-# sc.exe create: binPath= e start= hanno UNO spazio dopo il =
-& sc.exe create $ServiceName binPath= "$binPath" start= auto DisplayName= "$DisplayName" type= own error= normal 2>$null
-if ($LASTEXITCODE -eq 0) {
-    Write-Log "   ✅ Servizio creato." "Green"
+# ══════════ FASE 4: Avvia ══════════
+log "═══ FASE 4: Avvio ═══" "Cyan"
+log ""
+log "▶️  Avvio..." "Yellow"
+Start-Service $svc -ErrorAction 0; Start-Sleep 3
+
+$stato = (Get-Service $svc -ErrorAction 0).Status
+if ($stato -eq "Running") {
+    log "   ✅ In esecuzione." "Green"
 } else {
-    Write-Log "   ❌ Creazione fallita (codice: $LASTEXITCODE). Eseguire come Administrator." "Red"
+    log "❌ Stato: $stato" "Red"
+    log "   Get-WinEvent -LogName Application | Where-Object { `$_.ProviderName -like '*FastDNS*' }" "Yellow"
     pause; exit 1
 }
+log ""
 
-# Recovery options (riavvio automatico dopo crash)
-& sc.exe failure $ServiceName reset= 86400 actions= restart/5000/restart/10000/restart/30000 2>$null
-& sc.exe failureflag $ServiceName 1 2>$null
-Write-Log "   ✅ Riavvio automatico configurato." "Green"
-Write-Log ""
+# ══════════ FASE 5: DNS sistema ══════════
+log "═══ FASE 5: DNS sistema ═══" "Cyan"
+log ""
+log "📋 Imposto DNS a 127.0.0.1..." "Yellow"
 
-# ── FASE 4: Avvio servizio ──────────────────
-Write-Log "═══════ FASE 4: Avvio servizio ═══════" "Cyan"
-Write-Log ""
-
-Write-Log "▶️  Avvio..." "Yellow"
-Start-Service -Name $ServiceName -ErrorAction SilentlyContinue
-Start-Sleep -Seconds 3
-
-$svcAfter = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
-if ($svcAfter -and $svcAfter.Status -eq "Running") {
-    Write-Log "   ✅ In esecuzione." "Green"
-} else {
-    Write-Log "   ❌ Stato: $($svcAfter.Status)" "Red"
-    Write-Log "   Log: Get-WinEvent -LogName Application | Where-Object { `$_.ProviderName -like '*FastDNS*' } | Format-Table -AutoSize" "Yellow"
-    pause; exit 1
-}
-Write-Log ""
-
-# ── FASE 5: DNS sistema ─────────────────────
-Write-Log "═══════ FASE 5: DNS sistema ═══════" "Cyan"
-Write-Log ""
-
-Write-Log "📋 Impostazione DNS a 127.0.0.1..." "Yellow"
+$ok = $true
 try {
-    Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq "Up" } | ForEach-Object {
-        Set-DnsClientServerAddress -InterfaceIndex $_.InterfaceIndex -ServerAddresses ("127.0.0.1") -ErrorAction SilentlyContinue
-        Write-Log "   → $($_.Name)" "Gray"
+    Get-NetAdapter -ErrorAction 0 | Where-Object Status -eq Up | ForEach-Object {
+        Set-DnsClientServerAddress $_.InterfaceIndex -ServerAddresses 127.0.0.1 -ErrorAction 0
+        log "   → $($_.Name)" "Gray"
     }
-    Write-Log "   ✅ Fatto." "Green"
-    Write-Log "   Per revert: Set-DnsClientServerAddress -InterfaceIndex X -ResetServerAddresses" "Gray"
-} catch { Write-Log "   ⚠️  Errore: $_" "Yellow" }
-Write-Log ""
+    log "   ✅ DNS impostato." "Green"
+    log "   Per revert: Get-NetAdapter | Set-DnsClientServerAddress -ResetServerAddresses" "Gray"
+} catch { log "   ⚠️  $($_.Exception.Message)" "Yellow" }
+log ""
 
-# ── FASE 6: Verifica finale ─────────────────
-Write-Log "═══════ FASE 6: Verifica finale ═══════" "Cyan"
-Write-Log ""
+# ══════════ FASE 6: Verifica ══════════
+log "═══ FASE 6: Verifica ═══" "Cyan"
+log ""
 
-$allOk = $true
-
-# Processo
-Write-Log "📋 Processo..." "Yellow"
-Start-Sleep -Seconds 1
+# 6a. Processo
+Start-Sleep 1
 try {
-    $p = Get-Process -Name "fastdns" -ErrorAction Stop
-    Write-Log "   ✅ PID $($p.Id)" "Green"
-} catch { Write-Log "   ❌ Non trovato!" "Red"; $allOk = $false }
+    $p = Get-Process fastdns -ErrorAction Stop
+    log "   ✅ Processo PID $($p.Id)" "Green"
+} catch { log "   ❌ Processo non trovato!" "Red"; $ok = $false }
 
-# Porta 53
-Write-Log "📋 Porta 53..." "Yellow"
+# 6b. Porta 53
 try {
-    $port = netstat -an 2>$null | Select-String "LISTENING" | Select-String ":53 "
-    if ($port) { Write-Log "   ✅ In ascolto" "Green" }
-    else { Write-Log "   ⚠️  Non rilevata" "Yellow" }
-} catch { Write-Log "   ⚠️  Impossibile verificare" "Yellow" }
+    $r = netstat -an 2>$null | Select-String LISTENING | Select-String ":53 "
+    if ($r) { log "   ✅ Porta 53 in ascolto" "Green" }
+    else { log "   ⚠️  Porta 53 non rilevata" "Yellow" }
+} catch { log "   ⚠️  Verifica porta fallita" "Yellow" }
 
-# Risoluzione DNS (usa Resolve-DnsName con server esplicito)
-Write-Log "📋 Risoluzione DNS (google.com via 127.0.0.1)..." "Yellow"
+# 6c. Risoluzione DNS
 try {
-    $result = Resolve-DnsName "google.com" -Server "127.0.0.1" -Type A -ErrorAction Stop
-    $ips = $result | Where-Object { $_.QueryType -eq "A" } | ForEach-Object { $_.IPAddress }
-    if ($ips) {
-        Write-Log "   ✅ google.com → $($ips -join ', ')" "Green"
-    } else { throw "Nessun IP" }
+    $r = Resolve-DnsName google.com -Server 127.0.0.1 -Type A -ErrorAction Stop
+    $ips = $r.IPAddress -join ", "
+    log "   ✅ google.com → $ips" "Green"
 } catch {
-    Write-Log "   ⚠️  Fallita: $_" "Yellow"
-    Write-Log "   Prova: Resolve-DnsName google.com -Server 127.0.0.1" "Gray"
-    $allOk = $false
+    log "   ⚠️  Fallita: $($_.Exception.Message)" "Yellow"
+    log "   Prova: Resolve-DnsName google.com -Server 127.0.0.1" "Gray"
+    $ok = $false
 }
 
-# DNSSEC
-if ($Dnssec) {
-    Write-Log "📋 DNSSEC..." "Yellow"
-    try {
-        $null = Resolve-DnsName "sigfail.verteiltesysteme.net" -Server "127.0.0.1" -Type A -ErrorAction Stop
-        Write-Log "   ⚠️  sigfail NON bloccato (verificare)" "Yellow"
-    } catch {
-        Write-Log "   ✅ sigfail bloccato (BOGUS corretto)" "Green"
-    }
+# 6d. DNSSEC
+try {
+    $null = Resolve-DnsName sigfail.verteiltesysteme.net -Server 127.0.0.1 -Type A -ErrorAction Stop
+    log "   ⚠️  sigfail NON bloccato (verificare DNSSEC)" "Yellow"
+} catch {
+    log "   ✅ DNSSEC: sigfail bloccato (BOGUS)" "Green"
 }
 
-Write-Log ""
+log ""
 
-# ── Riepilogo finale ─────────────────────────
+# ══════════ RIEPILOGO ══════════
 Write-Host "╔══════════════════════════════════════════╗" -ForegroundColor Cyan
-if ($allOk) {
+if ($ok) {
     Write-Host "║   ✅ FastDNS installato con successo!   ║" -ForegroundColor Green
 } else {
     Write-Host "║   ⚠️  Installazione completata con warning ║" -ForegroundColor Yellow
 }
 Write-Host "╚══════════════════════════════════════════╝" -ForegroundColor Cyan
 Write-Host ""
-Write-Log "Riepilogo:" "Cyan"
-Write-Log "  Servizio : $ServiceName" "White"
-Write-Log "  Binario  : $BinaryPath" "White"
-Write-Log "  Args     : $binPath" "White"
-Write-Log "  Log      : $LogFile" "White"
-Write-Log ""
-
-if ($allOk) {
-    Write-Log "✅ Installazione completata con successo!" "Green"
-    Write-Log "   Il DNS di sistema punta a 127.0.0.1." "Green"
-} else {
-    Write-Log "⚠️  Installazione completata con warning." "Yellow"
-}
-
-Write-Log ""
-Write-Log "Per disinstallare: sc.exe stop FastDNS; sc.exe delete FastDNS" "Gray"
-Write-Log "Per ripristinare DNS: Get-NetAdapter | Set-DnsClientServerAddress -ResetServerAddresses" "Gray"
-Write-Log ""
+log "Riepilogo:" "Cyan"
+log "  Servizio : $svc" "White"
+log "  Binario  : $BinaryPath" "White"
+log "  Args     : $cmd" "White"
+log "  Log      : $log" "White"
+log ""
+log "Per disinstallare:" "Gray"
+log "  sc.exe stop $svc; sc.exe delete $svc" "Gray"
+log "  Get-NetAdapter | Set-DnsClientServerAddress -ResetServerAddresses" "Gray"
+log ""
 
 pause
