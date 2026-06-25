@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::process::Command;
 
 #[cfg(target_os = "macos")]

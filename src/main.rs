@@ -934,6 +934,7 @@ fn escape_xml(s: &str) -> String {
 }
 
 /// Install FastDNS as a system service, using `config` for dynamic plist generation.
+#[allow(unused_variables)]
 fn install_service_route(config: &FastDnsConfig) {
     #[cfg(target_os = "macos")]
     {
