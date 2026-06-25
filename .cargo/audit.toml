@@ -1,0 +1,3 @@
+[advisories]
+# quinn-proto: transitive dependency pulled by reqwest/axum, not directly used
+ignore = ["RUSTSEC-2026-0185"]
