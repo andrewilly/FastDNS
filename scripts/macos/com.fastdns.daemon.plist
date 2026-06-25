@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- FastDNS daemon for launchd -->
+
+    <!-- Label uniquely identifies this job -->
+    <key>Label</key>
+    <string>com.fastdns.daemon</string>
+
+    <!-- Path to the executable -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/fastdns</string>
+        <string>-b</string>
+        <string>127.0.0.1:53</string>
+        <string>-c</string>
+        <string>250000</string>
+        <string>--dnssec</string>
+    </array>
+
+    <!-- Keep the process alive: restart only if it crashes/exits abnormally -->
+    <key>KeepAlive</key>
+    <dict>
+        <key>Crashed</key>
+        <true/>
+    </dict>
+
+    <!-- Run at system load -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Run as root (required for port 53) -->
+    <key>UserName</key>
+    <string>root</string>
+
+    <!-- Standard I/O paths for logging -->
+    <key>StandardOutPath</key>
+    <string>/var/log/fastdns.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/var/log/fastdns.error.log</string>
+
+    <!-- Set environment variables -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>RUST_BACKTRACE</key>
+        <string>1</string>
+    </dict>
+
+    <!-- Throttle interval (seconds) between respawns if process exits quickly -->
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+
+    <!-- Soft resource limits -->
+    <key>SoftResourceLimits</key>
+    <dict>
+        <!-- Max number of open file descriptors -->
+        <key>NumberOfFiles</key>
+        <integer>65535</integer>
+    </dict>
+
+    <!-- Hard resource limits -->
+    <key>HardResourceLimits</key>
+    <dict>
+        <key>NumberOfFiles</key>
+        <integer>65535</integer>
+    </dict>
+
+    <!-- Only launch once the network is up -->
+    <key>WatchPaths</key>
+    <array>
+        <string>/etc/resolv.conf</string>
+    </array>
+</dict>
+</plist>

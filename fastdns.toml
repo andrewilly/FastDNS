@@ -1,0 +1,87 @@
+# FastDNS Configuration File
+# Copy this to /etc/fastdns/fastdns.toml and customize.
+
+# ── Server ─────────────────────────────────────────────────────────
+# Address to bind the DNS server
+bind = "127.0.0.1:53"
+
+# Enable IPv6 resolution (AAAA records)
+ipv6 = false
+
+# Enable DNSSEC OK bit (requests authenticated data)
+dnssec = false
+
+# DNSSEC enforcement: "ad" (set AD bit), "enforce" (reject bogus), "off"
+dnssec_policy = "ad"
+
+# Maximum cache entries (default: 250000)
+cache_size = 250000
+
+# Disable startup domain prefetching
+no_prefetch = false
+
+# ── Forwarding Mode ────────────────────────────────────────────────
+# When set, FastDNS forwards queries to this upstream resolver
+# instead of performing full recursive resolution.
+# Useful for hybrid deployments or initial cache warming.
+# upstream = "1.1.1.1:53"
+
+# Use DNS-over-HTTPS for forwarding
+# doh = true
+
+# Use DNS-over-TLS for forwarding
+# dot = false
+
+# ── Blocklist / Filtering ──────────────────────────────────────────
+# Blocklist mode: "none", "adblock", "malware", "all"
+blocklist_mode = "none"
+
+# Sources for automatic blocklist download
+blocklist_sources = [
+    "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts",
+    "https://s3.amazonaws.com/lists.disconnect.me/simple_tracking.txt",
+    "https://s3.amazonaws.com/lists.disconnect.me/simple_ad.txt",
+]
+
+# Manual blocklist entries (domains to always block)
+blocklist = []
+
+# Manual whitelist entries (domains to never block)
+whitelist = []
+
+# Custom DNS records (domain -> IP/hostname)
+# Format: "example.com = 192.168.1.100"
+custom_dns = []
+
+# Response for blocked queries: "nxdomain" or "nullroute"
+block_response = "nxdomain"
+
+# Nullroute IPv4 and IPv6 addresses
+nullroute = "0.0.0.0"
+nullroute_v6 = "::"
+
+# ── Rate Limiting ──────────────────────────────────────────────────
+# Maximum queries per second per client IP
+rate_limit_qps = 100
+
+# Burst size (allow temporary spikes)
+rate_limit_burst = 200
+
+# ── Logging ────────────────────────────────────────────────────────
+# Log file directory (empty = stderr only)
+log_file = "/var/log/fastdns/"
+
+# Log level: error, warn, info, debug, trace
+log_level = "info"
+
+# ── REST API ──────────────────────────────────────────────────────
+# REST API bind address (empty = disabled)
+# api_bind = "127.0.0.1:8080"
+
+# Enable Prometheus metrics on the API endpoint
+metrics = false
+
+# ── TLS / DoT ──────────────────────────────────────────────────────
+# Path to TLS certificate for DoT server (optional)
+# tls_cert = "/etc/fastdns/cert.pem"
+# tls_key  = "/etc/fastdns/key.pem"

@@ -1,0 +1,39 @@
+# FastDNS .dockerignore
+
+# Rust build artifacts
+target/
+debug/
+release/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+*.out
+
+# Cache
+*.cache
+
+# Git
+.git/
+.gitignore
+
+# Scripts (not needed in Docker)
+scripts/
+*.sh
+*.ps1
+
+# Reports
+DEV_REPORT.md
+WARMUP_REPORT.md
+
+# Lock file (builder handles this)
+Cargo.lock

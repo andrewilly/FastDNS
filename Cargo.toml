@@ -1,0 +1,89 @@
+[package]
+name = "fastdns"
+version = "0.1.0"
+edition = "2021"
+description = "Super fast independent DNS recursive resolver - daemon/server"
+authors = ["FastDNS Team"]
+license = "MIT"
+
+[features]
+default = ["doh", "dot", "dnssec"]
+doh = []
+dot = []
+dnssec = []
+
+[dependencies]
+tokio = { version = "1", features = ["full", "rt-multi-thread", "macros", "net", "sync", "time", "io-util", "fs", "process", "signal"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+clap = { version = "4", features = ["derive", "env"] }
+rand = "0.8"
+libc = "0.2"
+futures = "0.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+dirs = "5.0"
+anyhow = "1.0"
+thiserror = "1.0"
+
+# DoH (DNS-over-HTTPS) via HTTP/2 with rustls
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2", "json"] }
+
+# DoT (DNS-over-TLS)
+tokio-rustls = "0.26"
+rustls = { version = "0.23", features = ["ring", "std", "logging"] }
+rustls-pki-types = "1"
+webpki-roots = "1"
+rcgen = { version = "0.11", features = ["pem", "x509-parser"] }
+
+# DNSSEC crypto
+ring = "0.17"
+base64 = "0.22"
+hex = "0.4"
+p256 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
+p384 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
+ed25519-dalek = "2.0"
+sha2 = "0.10"
+
+# General
+data-encoding = "2"
+bytes = "1.5"
+bitflags = "2.0"
+
+# Metrics
+metrics = "0.21"
+metrics-exporter-prometheus = "0.13"
+
+# LRU cache
+lru = "0.12"
+
+# Rate limiting
+governor = "0.6"
+
+# File logging
+tracing-appender = "0.2"
+
+# HTTP/API server (axum for REST API + dashboard)
+axum = { version = "0.7", features = ["json"] }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors"] }
+hyper = { version = "1", features = ["full"] }
+chrono = { version = "0.4", features = ["serde"] }
+
+# DNS-over-QUIC (future use)
+# quinn = "0.10"
+
+# Windows service support
+[target.'cfg(windows)'.dependencies]
+windows-service = "0.8"
+winreg = "0.10"
+
+# Unix-only dependencies (macOS + Linux)
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.28", features = ["user", "process", "socket", "feature", "fs", "uio"] }
+
+# Testing
+[dev-dependencies]
+tokio-test = "0.4"
+proptest = "1.0"

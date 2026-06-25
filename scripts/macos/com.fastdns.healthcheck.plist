@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- FastDNS health checker — periodically tests if the resolver responds,
+         and if not, forces a restart via launchctl kickstart. -->
+
+    <key>Label</key>
+    <string>com.fastdns.healthcheck</string>
+
+    <!-- Every 60 seconds, query FastDNS and restart if it doesn't respond -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/sh</string>
+        <string>-c</string>
+        <string>
+HEALTH=$(/usr/local/bin/fastdns --healthcheck 2>&1) || {
+    echo "$HEALTH"
+    echo "Health check FAILED — restarting FastDNS..."
+    launchctl kickstart -k system/com.fastdns.daemon
+}
+        </string>
+    </array>
+
+    <!-- Run every 60 seconds -->
+    <key>StartInterval</key>
+    <integer>60</integer>
+
+    <!-- Run at system load (after a short delay) -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <!-- Only run if the main FastDNS job is loaded -->
+    <key>KeepAlive</key>
+    <false/>
+
+    <!-- Need root to kickstart the main daemon -->
+    <key>UserName</key>
+    <string>root</string>
+
+    <!-- Standard error for debugging -->
+    <key>StandardOutPath</key>
+    <string>/var/log/fastdns.healthcheck.log</string>
+    <key>StandardErrorPath</key>
+    <string>/var/log/fastdns.healthcheck.log</string>
+
+    <!-- Throttle: don't run more often than every 30 seconds -->
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+</dict>
+</plist>
