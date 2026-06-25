@@ -45,7 +45,9 @@ use std::time::Duration;
 
 use clap::Parser;
 use tokio::signal;
-use tracing::{error, info, warn};
+use tracing::{error, info};
+#[cfg(windows)]
+use tracing::warn;
 use tracing_subscriber::EnvFilter;
 
 use crate::config::{CliOverrides, FastDnsConfig};
