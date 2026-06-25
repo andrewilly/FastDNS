@@ -59,6 +59,7 @@ const SHUTDOWN_GRACE_PERIOD: Duration = Duration::from_secs(5);
 #[cfg(windows)]
 mod service_handler {
     use std::ffi::OsString;
+    use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Duration;
 
@@ -71,6 +72,8 @@ mod service_handler {
         service_control_handler::{self, ServiceControlHandlerResult},
         service_dispatcher,
     };
+
+    use crate::server::udp::{run_server, ServerConfig};
 
     static RUNNING: AtomicBool = AtomicBool::new(true);
     static CONFIG: std::sync::OnceLock<crate::server::udp::ServerConfig> =
