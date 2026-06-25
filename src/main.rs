@@ -20,18 +20,22 @@
 #![cfg_attr(windows, allow(dead_code, unused_variables, unused_imports))]
 // Clippy: DNS type names (CNAME, SOA, AAAA, etc.) follow RFC naming, not Rust conventions.
 // Type complexity is inherent to DNS resolver internals.
-#![allow(clippy::upper_case_acronyms, clippy::type_complexity, clippy::wrong_self_convention)]
+#![allow(
+    clippy::upper_case_acronyms,
+    clippy::type_complexity,
+    clippy::wrong_self_convention
+)]
 
 pub mod api;
 mod blocklist;
 mod config;
 mod dns;
 mod dnssec;
+mod health;
 mod resolver;
 mod server;
-mod transport;
 mod system_dns;
-mod health;
+mod transport;
 
 use std::net::SocketAddr;
 use std::process;
@@ -41,12 +45,12 @@ use std::time::Duration;
 
 use clap::Parser;
 use tokio::signal;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
 use crate::config::{CliOverrides, FastDnsConfig};
 use crate::server::tcp::run_tcp_server;
-use crate::server::udp::{run_server, ServerConfig};
+use crate::server::udp::run_server;
 
 /// How long to wait for graceful shutdown
 const SHUTDOWN_GRACE_PERIOD: Duration = Duration::from_secs(5);
@@ -59,36 +63,47 @@ mod service_handler {
     use std::time::Duration;
 
     use windows_service::{
-        service::{ServiceControl, ServiceControlAccept, ServiceExitCode, ServiceState, ServiceStatus, ServiceType},
+        define_windows_service,
+        service::{
+            ServiceControl, ServiceControlAccept, ServiceExitCode, ServiceState, ServiceStatus,
+            ServiceType,
+        },
         service_control_handler::{self, ServiceControlHandlerResult},
-        service_dispatcher, define_windows_service,
+        service_dispatcher,
     };
 
     static RUNNING: AtomicBool = AtomicBool::new(true);
-    static CONFIG: std::sync::OnceLock<crate::server::udp::ServerConfig> = std::sync::OnceLock::new();
+    static CONFIG: std::sync::OnceLock<crate::server::udp::ServerConfig> =
+        std::sync::OnceLock::new();
 
     define_windows_service!(ffi_service_main, my_service_main);
 
     fn my_service_main(_arguments: Vec<OsString>) {
-        let status_handle = service_control_handler::register("FastDNS", move |control_event| -> ServiceControlHandlerResult {
-            match control_event {
-                ServiceControl::Stop | ServiceControl::Shutdown => {
-                    RUNNING.store(false, Ordering::SeqCst);
-                    ServiceControlHandlerResult::NoError
+        let status_handle = service_control_handler::register(
+            "FastDNS",
+            move |control_event| -> ServiceControlHandlerResult {
+                match control_event {
+                    ServiceControl::Stop | ServiceControl::Shutdown => {
+                        RUNNING.store(false, Ordering::SeqCst);
+                        ServiceControlHandlerResult::NoError
+                    }
+                    _ => ServiceControlHandlerResult::NotImplemented,
                 }
-                _ => ServiceControlHandlerResult::NotImplemented,
-            }
-        }).expect("Failed to register service control handler");
+            },
+        )
+        .expect("Failed to register service control handler");
 
-        status_handle.set_service_status(ServiceStatus {
-            service_type: ServiceType::OWN_PROCESS,
-            current_state: ServiceState::Running,
-            controls_accepted: ServiceControlAccept::STOP,
-            exit_code: ServiceExitCode::Win32(0),
-            checkpoint: 0,
-            wait_hint: Duration::default(),
-            process_id: None,
-        }).expect("Failed to report RUNNING status");
+        status_handle
+            .set_service_status(ServiceStatus {
+                service_type: ServiceType::OWN_PROCESS,
+                current_state: ServiceState::Running,
+                controls_accepted: ServiceControlAccept::STOP,
+                exit_code: ServiceExitCode::Win32(0),
+                checkpoint: 0,
+                wait_hint: Duration::default(),
+                process_id: None,
+            })
+            .expect("Failed to report RUNNING status");
 
         let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
         if let Some(config) = CONFIG.get() {
@@ -103,7 +118,9 @@ mod service_handler {
                         config.enable_ipv6,
                         config.dnssec_ok,
                         config.cache_size,
-                    ).await.unwrap()
+                    )
+                    .await
+                    .unwrap(),
                 );
                 let cancel = Arc::new(AtomicBool::new(false));
                 let cancel_clone = cancel.clone();
@@ -277,9 +294,7 @@ fn main() {
         let addr = config.bind.parse::<SocketAddr>().unwrap();
         let domain = cli.healthcheck_domain.clone();
         let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
-        let ok = rt.block_on(async {
-            health::run_healthcheck(addr, &domain).await
-        });
+        let ok = rt.block_on(async { health::run_healthcheck(addr, &domain).await });
         process::exit(if ok { 0 } else { 1 });
     }
 
@@ -294,7 +309,10 @@ fn main() {
             Ok(true) => return,
             Ok(false) => {}
             Err(e) => {
-                eprintln!("Warning: service mode failed ({}), running as normal process.", e);
+                eprintln!(
+                    "Warning: service mode failed ({}), running as normal process.",
+                    e
+                );
             }
         }
     }
@@ -304,11 +322,13 @@ fn main() {
         let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
         rt.block_on(async {
             if config.doh {
-                run_diagnostic_query_doh(&query_name, &cli.query_type, config.ipv6, config.dnssec).await;
+                run_diagnostic_query_doh(&query_name, &cli.query_type, config.ipv6, config.dnssec)
+                    .await;
             } else if config.dot {
                 run_diagnostic_query_dot(&query_name, &cli.query_type).await;
             } else {
-                run_diagnostic_query(&query_name, &cli.query_type, config.ipv6, config.dnssec).await;
+                run_diagnostic_query(&query_name, &cli.query_type, config.ipv6, config.dnssec)
+                    .await;
             }
         });
         return;
@@ -317,24 +337,65 @@ fn main() {
     // Normal server mode
     let bind = config.bind.clone();
     info!("╔══════════════════════════════════════════╗");
-    info!("║         🚀 FastDNS v{}          ║", env!("CARGO_PKG_VERSION"));
+    info!(
+        "║         🚀 FastDNS v{}          ║",
+        env!("CARGO_PKG_VERSION")
+    );
     info!("║     Independent Recursive Resolver      ║");
     info!("╚══════════════════════════════════════════╝");
     info!("");
     info!("Listening on   : {}", bind);
-    info!("IPv6 support   : {}", if config.ipv6 { "✅ enabled" } else { "❌ disabled" });
-    info!("DNSSEC OK      : {}", if config.dnssec { "✅ enabled" } else { "❌ disabled" });
+    info!(
+        "IPv6 support   : {}",
+        if config.ipv6 {
+            "✅ enabled"
+        } else {
+            "❌ disabled"
+        }
+    );
+    info!(
+        "DNSSEC OK      : {}",
+        if config.dnssec {
+            "✅ enabled"
+        } else {
+            "❌ disabled"
+        }
+    );
     if let Some(ref up) = config.upstream {
-        info!("Upstream       : {} ({})", up, if config.doh { "DoH" } else if config.dot { "DoT" } else { "UDP" });
+        info!(
+            "Upstream       : {} ({})",
+            up,
+            if config.doh {
+                "DoH"
+            } else if config.dot {
+                "DoT"
+            } else {
+                "UDP"
+            }
+        );
     }
     info!("Cache size     : {} entries", config.cache_size);
-    info!("Prefetch       : {}", if config.no_prefetch { "❌ disabled" } else { "✅ enabled" });
+    info!(
+        "Prefetch       : {}",
+        if config.no_prefetch {
+            "❌ disabled"
+        } else {
+            "✅ enabled"
+        }
+    );
     info!("Blocklist mode : {}", config.blocklist_mode);
     info!("Blocked domains: {} loaded", 0); // Updated after blocklist load
     if !config.api_bind.is_empty() {
         info!("API server     : {}", config.api_bind);
     }
-    info!("Log file       : {}", if config.log_file.is_empty() { "stderr" } else { &config.log_file });
+    info!(
+        "Log file       : {}",
+        if config.log_file.is_empty() {
+            "stderr"
+        } else {
+            &config.log_file
+        }
+    );
     info!("");
 
     let server_config = config.to_server_config();
@@ -351,7 +412,7 @@ fn main() {
                 server_config.cache_size,
             )
             .await
-            .expect("Failed to create resolver")
+            .expect("Failed to create resolver"),
         );
 
         // Initialize blocklist if enabled
@@ -361,9 +422,11 @@ fn main() {
             let bl_clone = bl.clone();
             tokio::spawn(async move {
                 bl_clone.load().await;
-                    let stats = bl_clone.stats().await;
-                    info!("Blocklist loaded: {} blocked domains, {} whitelisted, {} custom records",
-                        stats.total_blocked, stats.total_whitelisted, stats.total_custom);
+                let stats = bl_clone.stats().await;
+                info!(
+                    "Blocklist loaded: {} blocked domains, {} whitelisted, {} custom records",
+                    stats.total_blocked, stats.total_whitelisted, stats.total_custom
+                );
             });
             Some(bl)
         } else {
@@ -375,7 +438,9 @@ fn main() {
             let api_state = crate::api::AppState {
                 start_time: std::time::Instant::now(),
                 resolver: resolver.clone(),
-                blocklist: blocklist.clone().map(|b| b as Arc<crate::blocklist::Blocklist>),
+                blocklist: blocklist
+                    .clone()
+                    .map(|b| b as Arc<crate::blocklist::Blocklist>),
                 query_count: Arc::new(tokio::sync::RwLock::new(0u64)),
                 blocked_count: Arc::new(tokio::sync::RwLock::new(0u64)),
             };
@@ -393,16 +458,14 @@ fn main() {
         let udp_resolver = resolver.clone();
         let udp_cancel = cancel_flag.clone();
         let udp_config = server_config.clone();
-        let mut udp_handle = tokio::spawn(async move {
-            run_server(udp_config, udp_cancel, udp_resolver).await
-        });
+        let mut udp_handle =
+            tokio::spawn(async move { run_server(udp_config, udp_cancel, udp_resolver).await });
 
         // Start TCP server
         let tcp_resolver = resolver.clone();
         let tcp_addr: SocketAddr = server_config.bind_addr;
-        let mut tcp_handle = tokio::spawn(async move {
-            run_tcp_server(tcp_addr, tcp_resolver).await
-        });
+        let mut tcp_handle =
+            tokio::spawn(async move { run_tcp_server(tcp_addr, tcp_resolver).await });
 
         // Wait for shutdown signal (Unix: SIGINT/SIGTERM, Windows: Ctrl+C)
         let cancel = cancel_flag.clone();
@@ -456,7 +519,11 @@ fn main() {
 
 /// Initialize tracing/logging based on config.
 fn init_logging(config: &FastDnsConfig) {
-    let log_level = if config.verbose { "debug" } else { &config.log_level };
+    let log_level = if config.verbose {
+        "debug"
+    } else {
+        &config.log_level
+    };
 
     if config.log_file.is_empty() {
         // Stderr only
@@ -501,7 +568,10 @@ fn check_bind_privileges(bind: &str, healthcheck: bool) {
             }
             #[cfg(windows)]
             {
-                warn!("Binding to privileged port {} may require administrator privileges.", addr.port());
+                warn!(
+                    "Binding to privileged port {} may require administrator privileges.",
+                    addr.port()
+                );
             }
         }
     }
@@ -519,7 +589,10 @@ fn parse_rtype(rtype_str: &str) -> u16 {
         "SOA" => 6,
         "SRV" => 33,
         _ => {
-            error!("Unknown record type: {}. Use A, AAAA, CNAME, MX, NS, TXT, SOA, SRV", rtype_str);
+            error!(
+                "Unknown record type: {}. Use A, AAAA, CNAME, MX, NS, TXT, SOA, SRV",
+                rtype_str
+            );
             process::exit(1);
         }
     }
@@ -538,7 +611,8 @@ async fn run_diagnostic_query(name: &str, rtype_str: &str, ipv6: bool, dnssec: b
                     let elapsed = start.elapsed();
                     info!("✅ Resolved in {:?}", elapsed);
                     for rec in &records {
-                        info!("   {} {} {} → {} (TTL={})",
+                        info!(
+                            "   {} {} {} → {} (TTL={})",
                             rec.name_str(),
                             rec.rtype,
                             rec.rclass,
@@ -571,9 +645,13 @@ async fn run_diagnostic_query_doh(name: &str, rtype_str: &str, ipv6: bool, dnsse
                     let elapsed = start.elapsed();
                     info!("✅ DoH resolved in {:?}", elapsed);
                     for rec in &records {
-                        info!("   {} {} {} → {} (TTL={})",
-                            rec.name_str(), rec.rtype, rec.rclass,
-                            rec.rdata_str(), rec.ttl
+                        info!(
+                            "   {} {} {} → {} (TTL={})",
+                            rec.name_str(),
+                            rec.rtype,
+                            rec.rclass,
+                            rec.rdata_str(),
+                            rec.ttl
                         );
                     }
                 }
@@ -606,25 +684,27 @@ async fn run_diagnostic_query_dot(name: &str, rtype_str: &str) {
 
     let start = std::time::Instant::now();
     match crate::transport::dot::dot_query_with_fallback(&query_bytes).await {
-        Ok(response_data) => {
-            match crate::dns::wire::decode_message(&response_data) {
-                Ok(response) => {
-                    let elapsed = start.elapsed();
-                    if response.header.rcode == 0 {
-                        info!("✅ DoT resolved in {:?}", elapsed);
-                        for rec in &response.answers {
-                            info!("   {} {} {} → {} (TTL={})",
-                                rec.name_str(), rec.rtype, rec.rclass,
-                                rec.rdata_str(), rec.ttl
-                            );
-                        }
-                    } else {
-                        error!("❌ DoT returned rcode={}", response.header.rcode);
+        Ok(response_data) => match crate::dns::wire::decode_message(&response_data) {
+            Ok(response) => {
+                let elapsed = start.elapsed();
+                if response.header.rcode == 0 {
+                    info!("✅ DoT resolved in {:?}", elapsed);
+                    for rec in &response.answers {
+                        info!(
+                            "   {} {} {} → {} (TTL={})",
+                            rec.name_str(),
+                            rec.rtype,
+                            rec.rclass,
+                            rec.rdata_str(),
+                            rec.ttl
+                        );
                     }
+                } else {
+                    error!("❌ DoT returned rcode={}", response.header.rcode);
                 }
-                Err(e) => error!("❌ DoT response parse failed: {}", e),
             }
-        }
+            Err(e) => error!("❌ DoT response parse failed: {}", e),
+        },
         Err(e) => error!("❌ DoT resolution failed: {}", e),
     }
 }
@@ -672,12 +752,14 @@ fn clean_old_installation() {
 
     // 1. Kill any running fastdns process
     if was_running {
-        println!("   ⛔ FastDNS è in esecuzione (PID {}), lo fermo...",
+        println!(
+            "   ⛔ FastDNS è in esecuzione (PID {}), lo fermo...",
             std::process::Command::new("pgrep")
                 .args(["-x", "fastdns"])
                 .output()
                 .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-                .unwrap_or_default());
+                .unwrap_or_default()
+        );
         let _ = std::process::Command::new("pkill")
             .args(["-9", "fastdns"])
             .status();
@@ -792,7 +874,8 @@ fn generate_plist(config: &FastDnsConfig, plist_path: &str) -> Result<(), String
     <string>com.fastdns.daemon</string>
     <key>ProgramArguments</key>
     <array>
-"#);
+"#,
+    );
 
     for arg in &args {
         plist.push_str(&format!("        <string>{}</string>\n", escape_xml(arg)));
@@ -826,10 +909,11 @@ fn generate_plist(config: &FastDnsConfig, plist_path: &str) -> Result<(), String
     </array>
 </dict>
 </plist>
-"#);
+"#,
+    );
 
-    let mut file = std::fs::File::create(plist_path)
-        .map_err(|e| format!("Failed to create plist: {}", e))?;
+    let mut file =
+        std::fs::File::create(plist_path).map_err(|e| format!("Failed to create plist: {}", e))?;
     file.write_all(plist.as_bytes())
         .map_err(|e| format!("Failed to write plist: {}", e))?;
 
@@ -855,15 +939,15 @@ fn install_service_route(config: &FastDnsConfig) {
         println!("╔══════════════════════════════════════════╗");
         println!("║   🚀 FastDNS macOS Installer             ║");
         println!("╚══════════════════════════════════════════╝");
-        println!("");
+        println!();
 
         // ── FASE 0: Cleanup ────────────────────────────
         clean_old_installation();
-        println!("");
+        println!();
 
         // ── FASE 1: Copia binario ──────────────────────
-        let binary_path = std::env::current_exe()
-            .unwrap_or_else(|_| "target/release/fastdns".into());
+        let binary_path =
+            std::env::current_exe().unwrap_or_else(|_| "target/release/fastdns".into());
         let install_dir = "/usr/local/bin";
         let installed_binary = format!("{}/fastdns", install_dir);
 
@@ -871,8 +955,8 @@ fn install_service_route(config: &FastDnsConfig) {
         std::fs::create_dir_all(install_dir).ok();
         match std::fs::copy(&binary_path, &installed_binary) {
             Ok(_) => {
-                std::fs::set_permissions(&installed_binary,
-                    std::fs::Permissions::from_mode(0o755)).ok();
+                std::fs::set_permissions(&installed_binary, std::fs::Permissions::from_mode(0o755))
+                    .ok();
                 println!("   ✅ Binario installato: {}", installed_binary);
             }
             Err(e) => {
@@ -880,7 +964,7 @@ fn install_service_route(config: &FastDnsConfig) {
                 return;
             }
         }
-        println!("");
+        println!();
 
         // ── FASE 2: Genera plist ───────────────────────
         let plist_dst = "/Library/LaunchDaemons/com.fastdns.daemon.plist";
@@ -889,8 +973,7 @@ fn install_service_route(config: &FastDnsConfig) {
         match generate_plist(config, plist_dst) {
             Ok(()) => {
                 use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(plist_dst,
-                    std::fs::Permissions::from_mode(0o644)).ok();
+                std::fs::set_permissions(plist_dst, std::fs::Permissions::from_mode(0o644)).ok();
                 println!("   ✅ Plist generato: {}", plist_dst);
             }
             Err(e) => {
@@ -898,7 +981,7 @@ fn install_service_route(config: &FastDnsConfig) {
                 return;
             }
         }
-        println!("");
+        println!();
 
         // ── FASE 3: Carica daemon ──────────────────────
         println!("📋 Carico il daemon via launchctl...");
@@ -924,9 +1007,13 @@ fn install_service_route(config: &FastDnsConfig) {
             std::thread::sleep(std::time::Duration::from_secs(1));
 
             if let Ok(s) = std::process::Command::new("osascript")
-                .args(["-e", &format!(
-                    "do shell script \"launchctl load -w {}\" with administrator privileges",
-                    plist_dst)])
+                .args([
+                    "-e",
+                    &format!(
+                        "do shell script \"launchctl load -w {}\" with administrator privileges",
+                        plist_dst
+                    ),
+                ])
                 .status()
             {
                 loaded = s.success();
@@ -942,7 +1029,7 @@ fn install_service_route(config: &FastDnsConfig) {
             eprintln!("      launchctl load -w {}", plist_dst);
             eprintln!("   Se il problema persiste, potrebbe servire un riavvio.");
         }
-        println!("");
+        println!();
 
         // ── FASE 4: Attendi bind ───────────────────────
         println!("⏳ Attendo l'avvio del demone...");
@@ -958,7 +1045,7 @@ fn install_service_route(config: &FastDnsConfig) {
             }
         }
         println!("   Per revert: sudo networksetup -setdnsservers Wi-Fi empty");
-        println!("");
+        println!();
 
         // ── FASE 6: Verifica ────────────────────────────
         println!("📋 Verifico la risoluzione DNS...");
@@ -977,12 +1064,14 @@ fn install_service_route(config: &FastDnsConfig) {
                 }
             }
             _ => {
-                eprintln!("   ⚠️  Verifica fallita. Il demone potrebbe essere ancora in fase di avvio.");
+                eprintln!(
+                    "   ⚠️  Verifica fallita. Il demone potrebbe essere ancora in fase di avvio."
+                );
                 eprintln!("   Controlla con: dig @127.0.0.1 google.com");
                 eprintln!("                 launchctl print system/com.fastdns.daemon");
             }
         }
-        println!("");
+        println!();
 
         println!("╔══════════════════════════════════════════╗");
         println!("║   ✅ FastDNS installato con successo!   ║");
@@ -1011,8 +1100,20 @@ fn install_service_route(config: &FastDnsConfig) {
         // Create new service
         println!("📋 Creating new FastDNS service...");
         let status = std::process::Command::new("sc")
-            .args(["create", "FastDNS", "binPath=", &bin_path, "start=", "auto",
-                   "DisplayName=", "FastDNS Recursive Resolver", "type=", "own", "error=", "normal"])
+            .args([
+                "create",
+                "FastDNS",
+                "binPath=",
+                &bin_path,
+                "start=",
+                "auto",
+                "DisplayName=",
+                "FastDNS Recursive Resolver",
+                "type=",
+                "own",
+                "error=",
+                "normal",
+            ])
             .status();
 
         match status {
@@ -1051,8 +1152,12 @@ fn uninstall_service_route() {
 
     #[cfg(target_os = "windows")]
     {
-        let _ = std::process::Command::new("sc").args(["stop", "FastDNS"]).status();
-        let status = std::process::Command::new("sc").args(["delete", "FastDNS"]).status();
+        let _ = std::process::Command::new("sc")
+            .args(["stop", "FastDNS"])
+            .status();
+        let status = std::process::Command::new("sc")
+            .args(["delete", "FastDNS"])
+            .status();
         match status {
             Ok(s) if s.success() => println!("✅ FastDNS service removed."),
             _ => eprintln!("❌ Run as Administrator: sc delete FastDNS"),

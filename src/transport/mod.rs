@@ -12,7 +12,6 @@ pub mod dot;
 use std::net::IpAddr;
 use std::time::Duration;
 
-
 /// A resolved DNS response (raw bytes + source info)
 #[derive(Debug, Clone)]
 pub struct DnsResponse {

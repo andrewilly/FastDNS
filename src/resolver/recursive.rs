@@ -28,8 +28,8 @@ use tracing::{debug, info, trace, warn};
 use crate::dns::constants::*;
 use crate::dns::error::{DnsError, DnsResult};
 use crate::dns::types::{
-    count_labels, domain_names_equal, encode_domain_name, labels_to_string, name_prefix,
-    Header, Message, Question, ResourceRecord, RData,
+    count_labels, domain_names_equal, encode_domain_name, labels_to_string, name_prefix, Header,
+    Message, Question, RData, ResourceRecord,
 };
 use crate::dns::wire::{decode_message, encode_message};
 
@@ -82,7 +82,9 @@ pub struct TcpPool {
 
 impl TcpPool {
     pub fn new() -> Self {
-        TcpPool { pool: HashMap::new() }
+        TcpPool {
+            pool: HashMap::new(),
+        }
     }
 
     /// Try to acquire an idle connection for `server`.
@@ -137,15 +139,14 @@ struct ServerHealth {
 struct RttCacheEntry {
     server_ip: Vec<u8>, // 4 or 16 bytes
     rtt_ms: f64,
-    timestamp: u64,  // unix seconds
+    timestamp: u64, // unix seconds
 }
 
 /// Platform-appropriate path for the RTT cache file.
 fn rtt_cache_path() -> PathBuf {
     #[cfg(target_os = "windows")]
     {
-        let base = std::env::var("APPDATA")
-            .unwrap_or_else(|_| "C:\\ProgramData".to_string());
+        let base = std::env::var("APPDATA").unwrap_or_else(|_| "C:\\ProgramData".to_string());
         let mut path = PathBuf::from(base);
         path.push("FastDNS");
         let _ = std::fs::create_dir_all(&path);
@@ -154,8 +155,7 @@ fn rtt_cache_path() -> PathBuf {
     }
     #[cfg(not(target_os = "windows"))]
     {
-        let home = std::env::var("HOME")
-            .unwrap_or_else(|_| "/tmp".to_string());
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
         let mut path = PathBuf::from(home);
         path.push(".fastdns");
         let _ = std::fs::create_dir_all(&path);
@@ -174,13 +174,17 @@ fn load_rtt_cache() -> HashMap<IpAddr, (f64, Instant)> {
     let Ok(mut file) = std::fs::File::open(&path) else {
         return map;
     };
-    let Ok(metadata) = file.metadata() else { return map; };
+    let Ok(metadata) = file.metadata() else {
+        return map;
+    };
     let file_size = metadata.len() as usize;
     if file_size < 1 {
         return map;
     }
     let mut buf = vec![0u8; file_size];
-    let Ok(_) = file.read_exact(&mut buf) else { return map; };
+    let Ok(_) = file.read_exact(&mut buf) else {
+        return map;
+    };
     let mut pos = 0;
     while pos < buf.len() {
         let ip_len = buf[pos] as usize; // 4 for IPv4, 16 for IPv6
@@ -207,23 +211,33 @@ fn load_rtt_cache() -> HashMap<IpAddr, (f64, Instant)> {
             4 => {
                 if ip_bytes.len() == 4 {
                     Some(IpAddr::V4(std::net::Ipv4Addr::new(
-                        ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3],
+                        ip_bytes[0],
+                        ip_bytes[1],
+                        ip_bytes[2],
+                        ip_bytes[3],
                     )))
-                } else { None }
+                } else {
+                    None
+                }
             }
             16 => {
                 if ip_bytes.len() == 16 {
                     let mut arr = [0u8; 16];
                     arr.copy_from_slice(ip_bytes);
                     Some(IpAddr::V6(std::net::Ipv6Addr::from(arr)))
-                } else { None }
+                } else {
+                    None
+                }
             }
             _ => None,
         };
 
         if let Some(ip) = ip {
             // Only load entries less than 1 hour old
-            let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
             if now.saturating_sub(3600) == 0 {
                 map.insert(ip, (rtt_ms, Instant::now()));
             }
@@ -237,7 +251,10 @@ fn load_rtt_cache() -> HashMap<IpAddr, (f64, Instant)> {
 fn save_rtt_cache(rtt_data: &[(IpAddr, f64)]) {
     let path = rtt_cache_path();
     let mut buf = Vec::with_capacity(rtt_data.len() * (1 + 16 + 8 + 8));
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
     for (ip, rtt_ms) in rtt_data {
         match ip {
             IpAddr::V4(v4) => {
@@ -294,24 +311,28 @@ impl RecursiveResolver {
     /// Create a new resolver bound to a random local UDP port.
     /// Spawns background tasks for RTT persistence, TCP pool cleanup, and health checks.
     pub async fn new(enable_ipv6: bool, dnssec_ok: bool, cache_size: usize) -> DnsResult<Self> {
-        let socket = UdpSocket::bind("0.0.0.0:0")
-            .await
-            .map_err(DnsError::Io)?;
+        let socket = UdpSocket::bind("0.0.0.0:0").await.map_err(DnsError::Io)?;
 
         // Load persisted RTT data
         let persisted_rtt = load_rtt_cache();
-        let mut server_rtt_cache = LruCache::new(std::num::NonZeroUsize::new(256).expect("LRU capacity > 0"));
+        let mut server_rtt_cache =
+            LruCache::new(std::num::NonZeroUsize::new(256).expect("LRU capacity > 0"));
         for (ip, (rtt, ts)) in &persisted_rtt {
             server_rtt_cache.put(*ip, (*rtt, *ts));
         }
         if !persisted_rtt.is_empty() {
-            info!("Loaded {} server RTT entries from cache", persisted_rtt.len());
+            info!(
+                "Loaded {} server RTT entries from cache",
+                persisted_rtt.len()
+            );
         }
 
         let server_rtt = Arc::new(Mutex::new(server_rtt_cache));
-        let server_health: Arc<Mutex<HashMap<IpAddr, ServerHealth>>> = Arc::new(Mutex::new(HashMap::new()));
+        let server_health: Arc<Mutex<HashMap<IpAddr, ServerHealth>>> =
+            Arc::new(Mutex::new(HashMap::new()));
         let tcp_pool = Arc::new(Mutex::new(TcpPool::new()));
-        let truncation_cache: Arc<Mutex<HashMap<IpAddr, Instant>>> = Arc::new(Mutex::new(HashMap::new()));
+        let truncation_cache: Arc<Mutex<HashMap<IpAddr, Instant>>> =
+            Arc::new(Mutex::new(HashMap::new()));
 
         // Spawn background tasks using cloned arcs
         Self::spawn_background_tasks(
@@ -323,8 +344,12 @@ impl RecursiveResolver {
 
         Ok(RecursiveResolver {
             cache: Arc::new(Mutex::new(DnsCache::with_max_entries(cache_size))),
-            ns_cache: Arc::new(Mutex::new(LruCache::new(std::num::NonZeroUsize::new(NS_CACHE_MAX).expect("LRU capacity > 0")))),
-            delegation_cache: Arc::new(Mutex::new(LruCache::new(std::num::NonZeroUsize::new(DELEGATION_CACHE_MAX).expect("LRU capacity > 0")))),
+            ns_cache: Arc::new(Mutex::new(LruCache::new(
+                std::num::NonZeroUsize::new(NS_CACHE_MAX).expect("LRU capacity > 0"),
+            ))),
+            delegation_cache: Arc::new(Mutex::new(LruCache::new(
+                std::num::NonZeroUsize::new(DELEGATION_CACHE_MAX).expect("LRU capacity > 0"),
+            ))),
             socket: Arc::new(socket),
             enable_ipv6,
             dnssec_ok,
@@ -390,7 +415,9 @@ impl RecursiveResolver {
                     servers.sort_by(|a, b| {
                         let a_rtt = rtt.get(a).map(|(r, _)| *r).unwrap_or(999.0);
                         let b_rtt = rtt.get(b).map(|(r, _)| *r).unwrap_or(999.0);
-                        a_rtt.partial_cmp(&b_rtt).unwrap_or(std::cmp::Ordering::Equal)
+                        a_rtt
+                            .partial_cmp(&b_rtt)
+                            .unwrap_or(std::cmp::Ordering::Equal)
                     });
                     servers.truncate(HEALTH_CHECK_COUNT);
                     servers
@@ -399,8 +426,9 @@ impl RecursiveResolver {
                     continue;
                 }
                 // Ping each server with a minimal root query
-                let root_query = Self::build_query_static(&[0], 1, 1, rand::thread_rng().gen(), false, false)
-                    .unwrap_or_default();
+                let root_query =
+                    Self::build_query_static(&[0], 1, 1, rand::thread_rng().gen(), false, false)
+                        .unwrap_or_default();
                 for server in &servers_to_check {
                     let q = root_query.clone();
                     let sock = match UdpSocket::bind("0.0.0.0:0").await {
@@ -410,17 +438,20 @@ impl RecursiveResolver {
                     let dest = SocketAddr::new(*server, DNS_PORT);
                     let start = Instant::now();
                     // Send health check query; if send fails, treat as failure
-                    let send_ok = tokio::time::timeout(
-                        Duration::from_secs(1),
-                        sock.send_to(&q, dest),
-                    ).await.ok().and_then(|r| r.ok()).is_some();
+                    let send_ok =
+                        tokio::time::timeout(Duration::from_secs(1), sock.send_to(&q, dest))
+                            .await
+                            .ok()
+                            .and_then(|r| r.ok())
+                            .is_some();
 
                     let recv_ok = if send_ok {
                         let mut buf = [0u8; 512];
-                        tokio::time::timeout(
-                            Duration::from_secs(1),
-                            sock.recv_from(&mut buf),
-                        ).await.ok().and_then(|r| r.ok()).is_some()
+                        tokio::time::timeout(Duration::from_secs(1), sock.recv_from(&mut buf))
+                            .await
+                            .ok()
+                            .and_then(|r| r.ok())
+                            .is_some()
                     } else {
                         false
                     };
@@ -428,7 +459,8 @@ impl RecursiveResolver {
                     if recv_ok {
                         let rtt_ms = start.elapsed().as_secs_f64() * 1000.0;
                         let mut rtt_cache = server_rtt.lock().await;
-                        let smoothed = rtt_cache.get(server)
+                        let smoothed = rtt_cache
+                            .get(server)
                             .map(|(avg, _last)| avg * 0.7 + rtt_ms * 0.3)
                             .unwrap_or(rtt_ms);
                         rtt_cache.put(*server, (smoothed, Instant::now()));
@@ -442,7 +474,10 @@ impl RecursiveResolver {
                         h.consecutive_failures += 1;
                         if h.consecutive_failures >= HEALTH_PENALTY_THRESHOLD {
                             let mut rtt_cache = server_rtt.lock().await;
-                            if let Some(penalized) = rtt_cache.get(server).map(|(avg, _last)| avg + HEALTH_PENALTY_MS) {
+                            if let Some(penalized) = rtt_cache
+                                .get(server)
+                                .map(|(avg, _last)| avg + HEALTH_PENALTY_MS)
+                            {
                                 rtt_cache.put(*server, (penalized, Instant::now()));
                             }
                         }
@@ -523,10 +558,15 @@ impl RecursiveResolver {
                     let n = name.to_string();
                     tokio::spawn(async move {
                         debug!("background prefresh for {} (TTL={})", n, ttl);
-                        let _ = self_clone.resolve_recursive(
-                            encode_domain_name(&n).unwrap_or_default(),
-                            rtype, rclass, 0, true,
-                        ).await;
+                        let _ = self_clone
+                            .resolve_recursive(
+                                encode_domain_name(&n).unwrap_or_default(),
+                                rtype,
+                                rclass,
+                                0,
+                                true,
+                            )
+                            .await;
                     });
                 }
                 // Cached records may or may not have been DNSSEC-validated;
@@ -548,7 +588,9 @@ impl RecursiveResolver {
 
         if let Some(stale) = stale_records {
             // Try recursive resolution with a longer timeout for stale refresh
-            let refresh = self.resolve_recursive_stale(encoded_name.clone(), rtype, rclass).await;
+            let refresh = self
+                .resolve_recursive_stale(encoded_name.clone(), rtype, rclass)
+                .await;
             match refresh {
                 Ok((fresh_records, _)) => {
                     // Successfully refreshed — return fresh data
@@ -568,7 +610,9 @@ impl RecursiveResolver {
         }
 
         // 2. Recursive resolution (using &self, interior mutability via Mutex)
-        let result = self.resolve_recursive(encoded_name.clone(), rtype, rclass, 0, true).await;
+        let result = self
+            .resolve_recursive(encoded_name.clone(), rtype, rclass, 0, true)
+            .await;
 
         // 3. Stats
         let elapsed = start.elapsed();
@@ -594,8 +638,13 @@ impl RecursiveResolver {
             cache.insert_records(&pair.0);
             let hits = cache.hits();
             let misses = cache.misses();
-            debug!("✅ {} resolved in {:?} (cache: {}/{})",
-                name, elapsed, hits, hits + misses);
+            debug!(
+                "✅ {} resolved in {:?} (cache: {}/{})",
+                name,
+                elapsed,
+                hits,
+                hits + misses
+            );
         } else {
             let mut stats = self.stats.lock().await;
             stats.failed_queries += 1;
@@ -615,7 +664,8 @@ impl RecursiveResolver {
         match encode_domain_name(name) {
             Ok(encoded) => {
                 let mut cache = self.cache.lock().await;
-                cache.lookup(&encoded, rtype, rclass)
+                cache
+                    .lookup(&encoded, rtype, rclass)
                     .map(|(records, _)| records)
                     .unwrap_or_default()
             }
@@ -636,483 +686,594 @@ impl RecursiveResolver {
         qname_minimize: bool,
     ) -> Pin<Box<dyn Future<Output = DnsResult<(Vec<ResourceRecord>, bool)>> + Send + '_>> {
         Box::pin(async move {
-        if depth > MAX_CNAME_DEPTH {
-            return Err(DnsError::Malformed("CNAME chain too deep"));
-        }
-
-        // Track whether DNSSEC validation returned Secure (AD bit).
-        let mut ad_bit: bool = false;
-
-        let mut nameservers: Vec<IpAddr> = root_hints::initial_root_addrs();
-        let name_str = labels_to_string(&name);
-
-        // QNAME Minimization (RFC 7816):
-        // Track how many labels of the full name we reveal to each nameserver.
-        // Start with only 1 label (the TLD) and increment gradually as we
-        // follow delegations, until we reach the full name.
-        // Disabled for NS name resolution (internal use) to reduce iterations.
-        let total_labels = count_labels(&name);
-        let mut revealed_labels: usize = if qname_minimize { 1 } else { total_labels };
-
-        // Check delegation cache (walk from longest to second-most-specific suffix)
-        {
-            let mut dc = self.delegation_cache.lock().await;
-            if let Some(servers) = Self::find_cached_delegation(&mut dc, &name) {
-                nameservers = servers;
-                debug!("delegation cache HIT for {} ({} servers)", name_str, nameservers.len());
-                // We already know the authoritative servers for this zone,
-                // so QNAME minimization is unnecessary — reveal the full name.
-                revealed_labels = total_labels;
-            }
-        }
-
-        for iteration in 0..MAX_ITERATIONS {
-            if nameservers.is_empty() {
-                return Err(DnsError::Malformed("no nameservers to query"));
+            if depth > MAX_CNAME_DEPTH {
+                return Err(DnsError::Malformed("CNAME chain too deep"));
             }
 
-            // Build minimized QNAME (RFC 7816):
-            // Reveal only labels up to `revealed_labels` from the right (closest to root).
-            // Start with just the TLD (e.g., "com"), then gradually add labels.
-            let minimized_name = if revealed_labels < total_labels {
-                let qname = name_prefix(&name, revealed_labels);
-                debug!("QNAME minimization: {} (revealed {} of {} labels)",
-                    labels_to_string(&qname), revealed_labels, total_labels);
-                qname
-            } else {
-                // Full name
-                name.clone()
-            };
+            // Track whether DNSSEC validation returned Secure (AD bit).
+            let mut ad_bit: bool = false;
 
-            // Build query (with EDNS0 OPT record if DNSSEC OK)
-            let id: u16 = rand::thread_rng().gen();
-            let dnssec_ok = self.dnssec_ok;
-            let query_bytes = Self::build_query_static(&minimized_name, rtype, rclass, id, dnssec_ok, false)?;
+            let mut nameservers: Vec<IpAddr> = root_hints::initial_root_addrs();
+            let name_str = labels_to_string(&name);
 
-            // Query ALL nameservers CONCURRENTLY
-            let msg = match self.query_servers_concurrent(&query_bytes, id, &nameservers).await {
-                Some(m) => m,
-                None => {
-                    debug!("iteration {}: no server responded for {}", iteration, name_str);
-                    if nameservers.len() > 1 {
-                        nameservers.rotate_left(1);
-                    }
-                    continue;
-                }
-            };
+            // QNAME Minimization (RFC 7816):
+            // Track how many labels of the full name we reveal to each nameserver.
+            // Start with only 1 label (the TLD) and increment gradually as we
+            // follow delegations, until we reach the full name.
+            // Disabled for NS name resolution (internal use) to reduce iterations.
+            let total_labels = count_labels(&name);
+            let mut revealed_labels: usize = if qname_minimize { 1 } else { total_labels };
 
-            debug!("[iter {}] response: tc={} qd={} an={} ns={} ar={} rcode={}",
-                iteration, msg.header.tc, msg.header.qdcount,
-                msg.header.ancount, msg.header.nscount, msg.header.arcount,
-                msg.header.rcode);
-
-            // Cache records from this response
-            self.cache_response(&msg).await;
-
-            // NXDOMAIN?
-                if msg.header.rcode == 3 {
-                    let (nx_ad, soa_records) = self.validate_negative_dnssec_response(&msg, &name, rclass, 0).await;
-                    return Err(DnsError::NxDomain(soa_records, nx_ad));
-                }
-            if msg.header.rcode != 0 {
-                debug!("server returned rcode={} for {} (name={})",
-                    msg.header.rcode, name_str,
-                    labels_to_string(&minimized_name));
-                // If we're already using the full name and the server refuses,
-                // try the next server rather than looping with the same query.
-                if revealed_labels >= total_labels && nameservers.len() > 1 {
-                    nameservers.rotate_left(1);
-                }
-                continue;
-            }
-
-            // --- Look for direct answers ---
-            let direct: Vec<ResourceRecord> = msg
-                .answers
-                .iter()
-                .filter(|r| domain_names_equal(&r.name, &name) && r.rtype == rtype)
-                .cloned()
-                .collect();
-
-            if !direct.is_empty() {
-                // DNSSEC: collect RRSIG and DNSKEY records from the response.
-                // The RD=1 fallback and validation run for all regular record types,
-                // but are skipped for DNSSEC metadata types (RRSIG=46, DNSKEY=48, DS=43)
-                // since those ARE the validation material and can't self-validate.
-                let is_dnssec_meta = rtype == 46 || rtype == 48 || rtype == 43;
-                if self.dnssec_ok && !is_dnssec_meta {
-                    let mut rrsigs: Vec<ResourceRecord> = msg.answers.iter()
-                        .chain(msg.authorities.iter())
-                        .filter(|r| r.rtype == 46)
-                        .cloned()
-                        .collect();
-                    let mut dnskeys: Vec<ResourceRecord> = msg.answers.iter()
-                        .chain(msg.authorities.iter())
-                        .filter(|r| r.rtype == 48)
-                        .cloned()
-                        .collect();
-
-                    // RD=1 fallback: if the iterative (RD=0) response didn't include
-                    // RRSIG/DNSKEY records, try a recursive query (RD=1) to the same
-                    // authoritative servers. Many auth servers only include DNSSEC
-                    // records when RD=1 is set.
-                    if (rrsigs.is_empty() || dnskeys.is_empty()) && !nameservers.is_empty() {
-                        debug!("RD=0 response lacks DNSSEC records for {}, trying RD=1 query to {} servers",
-                            name_str, nameservers.len());
-                        if let Some(rd1_msg) = self.query_rd1(&name, rtype, rclass, &nameservers).await {
-                            let rd1_rrsigs: Vec<ResourceRecord> = rd1_msg.answers.iter()
-                                .chain(rd1_msg.authorities.iter())
-                                .filter(|r| r.rtype == 46)
-                                .cloned()
-                                .collect();
-                            let rd1_dnskeys: Vec<ResourceRecord> = rd1_msg.answers.iter()
-                                .chain(rd1_msg.authorities.iter())
-                                .filter(|r| r.rtype == 48)
-                                .cloned()
-                                .collect();
-                            if !rd1_rrsigs.is_empty() || !rd1_dnskeys.is_empty() {
-                                debug!("RD=1 query returned {} RRSIGs, {} DNSKEYs for {}",
-                                    rd1_rrsigs.len(), rd1_dnskeys.len(), name_str);
-                                if rrsigs.is_empty() { rrsigs = rd1_rrsigs; }
-                                if dnskeys.is_empty() { dnskeys = rd1_dnskeys; }
-                            }
-                        }
-                    }
-
-                    // If we have RRSIGs but still no DNSKEYs after the RD=1
-                    // fallback, try a full recursive resolve for DNSKEY type 48.
-                    // Cloudflare and other CDNs often omit DNSKEYs from A/AAAA
-                    // responses even with DO=1, and the delegated/auth server
-                    // (e.g., dnscheck.tools web server) may REFUSE DNSKEY queries.
-                    // A full recursive resolve goes back to the zone's authoritative
-                    // nameservers (Cloudflare) which DO respond to type-48 queries.
-                    if !rrsigs.is_empty() && dnskeys.is_empty() {
-                        // Extract the zone name from the RRSIG's signer_name
-                        let zone_labels = rrsigs.iter()
-                            .find_map(|r| {
-                                if let Some(RData::RRSIG { signer_name, .. }) = &r.parsed {
-                                    Some(signer_name.clone())
-                                } else {
-                                    None
-                                }
-                            })
-                            .unwrap_or_else(|| name.clone());
-                        let zone_str = crate::dns::types::labels_to_string(&zone_labels);
-                        debug!("No DNSKEYs in response for {}; resolving {} type=48",
-                            name_str, zone_str);
-                        match self.resolve(&zone_str, 48, rclass).await {
-                            Ok(records) if !records.is_empty() => {
-                                debug!("DNSKEY resolve returned {} records for zone {}",
-                                    records.len(), zone_str);
-                                dnskeys = records;
-                                // Also fetch DNSKEY RRSIGs from cache (they were cached during the resolve)
-                                let dnskey_rrsigs_cached = self.resolve_dnssec(&zone_str, 46, rclass).await;
-                                if !dnskey_rrsigs_cached.is_empty() {
-                                    debug!("Fetched {} DNSKEY RRSIGs from cache for chain validation",
-                                        dnskey_rrsigs_cached.len());
-                                    // Merge with existing rrsigs (avoid duplicates by name+rdata)
-                                    for rr in dnskey_rrsigs_cached {
-                                        // Check type_covered from parsed data or raw RDATA
-                                        let tc = if let Some(RData::RRSIG { type_covered, .. }) = &rr.parsed {
-                                            Some(*type_covered)
-                                        } else if rr.rtype == 46 && rr.rdata.len() >= 2 {
-                                            Some(u16::from_be_bytes([rr.rdata[0], rr.rdata[1]]))
-                                        } else { None };
-                                        if tc == Some(48) && !rrsigs.iter().any(|r| r.rtype == 46 && r.name == rr.name && r.rdata == rr.rdata) {
-                                            rrsigs.push(rr);
-                                        }
-                                    }
-                                }
-                            }
-                            _ => debug!("DNSKEY resolve failed for zone {}", zone_str),
-                        }
-                    }
-
-                    let vresult = self.validate_dnssec(&direct, &rrsigs, &dnskeys);
-                    match vresult {
-                        crate::dnssec::ValidationResult::Secure => {
-                            debug!("DNSSEC validation PASSED for {}", name_str);
-                            ad_bit = true;
-                        }
-                        crate::dnssec::ValidationResult::Bogus(reason) => {
-                            warn!("DNSSEC validation FAILED for {}: {} — REJECTING", name_str, reason);
-                            return Err(DnsError::Malformed(
-                                "DNSSEC validation failed: signature invalid or expired"
-                            ));
-                        }
-                        crate::dnssec::ValidationResult::Insecure => {
-                            debug!("DNSSEC: zone is insecure (no DS), accepting {}", name_str);
-                        }
-                        crate::dnssec::ValidationResult::Indeterminate => {
-                            debug!("DNSSEC validation indeterminate for {} (no DNSSEC data)", name_str);
-                            if !dnskeys.is_empty() && rrsigs.is_empty() {
-                                warn!("{}: DNSKEYs present but no RRSIGs — REJECTING", name_str);
-                                return Err(DnsError::Malformed(
-                                    "DNSSEC: DNSKEYs without RRSIGs for signed zone"
-                                ));
-                            }
-                            // Missing signature check: if the zone has DS records (parent says
-                            // it's signed) but the response has no RRSIGs at all, reject.
-                            if rrsigs.is_empty() && total_labels >= 2 {
-                                // Walk up labels to find if any parent zone has DS records.
-                                // The delegation response cached DS records from the parent zone.
-                                let mut check_labels = total_labels - 1; // strip first label
-                                while check_labels >= 2 {
-                                    let zone_bytes = name_prefix(&name, check_labels);
-                                    let zone_str = labels_to_string(&zone_bytes);
-                                    let ds_records = self.resolve_dnssec(&zone_str, 43, rclass).await;
-                                    if !ds_records.is_empty() {
-                                        warn!("{}: DS records found for {} but response has no RRSIGs — REJECTING",
-                                            name_str, zone_str);
-                                        return Err(DnsError::Malformed(
-                                            "DNSSEC: signed zone returned unsigned answer"
-                                        ));
-                                    }
-                                    check_labels -= 1;
-                                }
-                            }
-                        }
-                    }
-
-                    // Chain-of-trust validation: validate DNSKEY records up to the root
-                    if !dnskeys.is_empty() {
-                        // Extract signer name from DNSKEY RRSIGs.
-                        // Handle both parsed records (from direct response) and unparsed
-                        // records (from cache, parsed: None) by reading raw RDATA.
-                        fn rrsig_type_covered(r: &ResourceRecord) -> Option<u16> {
-                            if let Some(RData::RRSIG { type_covered, .. }) = &r.parsed {
-                                return Some(*type_covered);
-                            }
-                            // Read from raw RDATA: first 2 bytes are type_covered
-                            if r.rtype == 46 && r.rdata.len() >= 2 {
-                                Some(u16::from_be_bytes([r.rdata[0], r.rdata[1]]))
-                            } else { None }
-                        }
-                        fn rrsig_signer_name(r: &ResourceRecord) -> Option<Vec<u8>> {
-                            if let Some(RData::RRSIG { signer_name, .. }) = &r.parsed {
-                                return Some(signer_name.clone());
-                            }
-                            // Read from raw RDATA: skip type_covered(2)+algorithm(1)+labels(1)+original_ttl(4)+expiration(4)+inception(4)+key_tag(2)
-                            // = 18 bytes header, then signer_name as compressed domain name
-                            if r.rtype == 46 && r.rdata.len() > 18 {
-                                let signer_start = 18;
-                                let signer_end = r.rdata.len();
-                                // The signer_name is a domain name in uncompressed wire format
-                                let mut name = Vec::new();
-                                let mut pos = signer_start;
-                                while pos < signer_end {
-                                    let len = r.rdata[pos] as usize;
-                                    if len == 0 {
-                                        name.push(0); // root label
-                                        break;
-                                    }
-                                    if pos + 1 + len > signer_end { break; }
-                                    name.push(r.rdata[pos]);
-                                    name.extend_from_slice(&r.rdata[pos+1..pos+1+len]);
-                                    pos += 1 + len;
-                                    if len == 0 { break; }
-                                }
-                                if !name.is_empty() { Some(name) } else { None }
-                            } else { None }
-                        }
-
-                        let dnskey_rrsigs: Vec<&ResourceRecord> = rrsigs.iter()
-                            .filter(|r| rrsig_type_covered(r) == Some(48))
-                            .collect();
-
-                        if !dnskey_rrsigs.is_empty() {
-                            // Use the first DNSKEY's owner name as the zone
-                            let zone = &dnskeys[0].name;
-                            // Get signer_name from the first DNSKEY RRSIG
-                            let signer = rrsig_signer_name(dnskey_rrsigs[0])
-                                .unwrap_or_else(|| zone.clone());
-                            let chain_result = self.validate_dnssec_chain(
-                                zone, &dnskeys, &rrsigs, &signer, 0
-                            ).await;
-                            match chain_result {
-                                crate::dnssec::ValidationResult::Secure => {
-                                    debug!("DNSSEC chain-of-trust PASSED for {}", name_str);
-                                }
-                                crate::dnssec::ValidationResult::Insecure => {
-                                    debug!("DNSSEC chain-of-trust: zone {} is insecure (no DS in parent), accepting", name_str);
-                                }
-                                crate::dnssec::ValidationResult::Bogus(reason) => {
-                                    // Chain-of-trust failure is logged but does NOT affect
-                                    // the AD bit or the response. The basic RRSIG validation
-                                    // already passed, and many zones have DS/DNSKEY mismatches
-                                    // due to rollovers or partial cache. Full chain validation
-                                    // will be strengthened in a future release.
-                                    debug!("DNSSEC chain-of-trust FAILED for {}: {} — ignored (basic validation passed)", name_str, reason);
-                                }
-                                _ => debug!("DNSSEC chain-of-trust indeterminate for {}", name_str),
-                            }
-                        } else {
-                            debug!("No DNSKEY RRSIGs found for chain validation of {}", name_str);
-                        }
-                    }
-                }
-                self.cache_delegation(&name, &nameservers).await;
-                return Ok((direct, ad_bit));
-            }
-
-            // --- CNAME chase ---
-            let cnames: Vec<ResourceRecord> = msg
-                .answers
-                .iter()
-                .filter(|r| domain_names_equal(&r.name, &name) && r.rtype == 5)
-                .cloned()
-                .collect();
-
-            if !cnames.is_empty() {
-                if let Some(RData::CNAME(target)) = &cnames[0].parsed {
-                    debug!("CNAME {} → {}", name_str, labels_to_string(target));
-                    let (sub_records, sub_ad) = self.resolve_recursive(target.clone(), rtype, rclass, depth + 1, true).await?;
-                    let mut all = Vec::with_capacity(sub_records.len() + 1);
-                    all.push(cnames.into_iter().next().unwrap());
-                    all.extend(sub_records);
-                    self.cache_delegation(&name, &nameservers).await;
-                    return Ok((all, ad_bit || sub_ad));
-                }
-                // Fallback: try to parse raw rdata
-                let raw_target = &cnames[0].rdata;
-                if !raw_target.is_empty() {
-                    let target_str = labels_to_string(raw_target);
-                    debug!("CNAME (raw) {} → {}", name_str, target_str);
-                    let (sub_records, sub_ad) = self.resolve_recursive(raw_target.to_vec(), rtype, rclass, depth + 1, true).await?;
-                    let mut all = Vec::with_capacity(sub_records.len() + 1);
-                    all.push(cnames.into_iter().next().unwrap());
-                    all.extend(sub_records);
-                    self.cache_delegation(&name, &nameservers).await;
-                    return Ok((all, ad_bit || sub_ad));
-                }
-            }
-
-            // --- NS Authority referral ---
-            let ns_records: Vec<&ResourceRecord> = msg
-                .authorities
-                .iter()
-                .filter(|r| r.rtype == 2)
-                .collect();
-
-            if !ns_records.is_empty() {
-                let mut new_servers = Vec::new();
-                let mut ns_to_resolve = Vec::new();
-
-                for ns in &ns_records {
-                    let ns_name_bytes = match &ns.parsed {
-                        Some(RData::NS(name)) => name.clone(),
-                        _ => ns.rdata.clone(),
-                    };
-
-                    // Glue in additional section?
-                    let glue: Vec<&ResourceRecord> = msg
-                        .additionals
-                        .iter()
-                        .filter(|r| {
-                            domain_names_equal(&r.name, &ns_name_bytes)
-                                && (r.rtype == 1 || (self.enable_ipv6 && r.rtype == 28))
-                        })
-                        .collect();
-
-                    if !glue.is_empty() {
-                        for g in glue {
-                            match &g.parsed {
-                                Some(RData::A(ip)) => new_servers.push(IpAddr::V4(*ip)),
-                                Some(RData::AAAA(ip)) if self.enable_ipv6 => {
-                                    new_servers.push(IpAddr::V6(*ip))
-                                }
-                                _ => {}
-                            }
-                        }
-                    } else if let Some(cached) = self.ns_cache.lock().await.get(&ns_name_bytes) {
-                        new_servers.extend(cached.iter().copied());
-                    } else {
-                        ns_to_resolve.push(ns_name_bytes);
-                    }
-                }
-
-                // Resolve NS names without glue — CONCURRENTLY using tokio::spawn
-                if !ns_to_resolve.is_empty() {
-                    let resolve_results = self
-                        .resolve_ns_names_concurrently(&ns_to_resolve, rclass, depth)
-                        .await;
-                    for (ns_name, ips) in resolve_results {
-                        if !ips.is_empty() {
-                            self.ns_cache.lock().await.put(ns_name.clone(), ips.clone());
-                            new_servers.extend(ips);
-                        }
-                    }
-                }
-
-                if !new_servers.is_empty() {
-                    // Cache the zone → NS IPs delegation so brother tasks
-                    // resolving other names in the same zone can skip root.
-                    if let Some(zone) = ns_records.first().map(|r| &r.name) {
-                        self.cache_delegation(zone, &new_servers).await;
-                        debug!("zone delegation cached: {}", labels_to_string(zone));
-                    }
-                    nameservers = new_servers;
-                    // QNAME minimization: reveal one more label after following a delegation
-                    if revealed_labels < total_labels {
-                        revealed_labels += 1;
-                        debug!("QNAME minimization: now revealing {} of {} labels",
-                            revealed_labels, total_labels);
-                    }
-                    debug!("iteration {}: following delegation for {}", iteration, name_str);
-                    continue;
-                }
-            }
-
-            // --- SOA negative response ---
-            // NODATA (NOERROR with SOA) means the zone exists but the requested
-            // record type doesn't. This is a valid response, not an error.
-            // Only treat as NXDOMAIN if the SOA owner name matches the query name
-            // AND RCODE is 3 (NXDOMAIN). RCODE=0 with SOA = NODATA (success, empty answer).
-            let soa: Vec<&ResourceRecord> = msg.authorities.iter()
-                .filter(|r| r.rtype == 6).collect();
-            if !soa.is_empty() {
-                debug!("iteration {}: SOA (negative) response for {}, {} SOA records",
-                    iteration, name_str, soa.len());
-                // Only error if the SOA owner name matches the query name (NXDOMAIN)
-                // AND rcode == 3. NODATA (rcode=0) is a valid empty response.
-                if msg.header.rcode == 3 && soa.iter().any(|r| domain_names_equal(&r.name, &name)) {
-                    let owned_soa: Vec<ResourceRecord> = soa.iter().map(|r| (*r).clone()).collect();
-                    return Err(DnsError::NxDomain(owned_soa, false));
-                }
-                // NODATA (rcode=0): domain exists but no matching record type.
-                // Return empty answer to the client.
-                if msg.header.rcode == 0 {
-                    debug!("NODATA response for {} — returning empty answer", name_str);
-                    // Validate DNSSEC for this negative response
-                    // The AD bit is set from negative DNSSEC validation (NSEC/NSEC3 chain)
-                    let (neg_ad, _) = self.validate_negative_dnssec_response(&msg, &name, rclass, rtype).await;
-                    let final_ad = ad_bit || neg_ad;
-                    // Try to return empty answer if we're at the authoritative server
-                    // (i.e., we followed the delegation chain and this is the final answer)
-                    return Ok((Vec::new(), final_ad));
-                }
-            }
-
-            // QNAME minimization: if we're using a shortened name and didn't get a
-            // delegation (no NS records in authority), jump to the full name.
-            // This handles the case where an intermediate name (e.g., "awsdns-01.net")
-            // is a regular hostname rather than a delegation zone.
-            if revealed_labels < total_labels {
-                let has_ns_delegation = msg.authorities.iter().any(|r| r.rtype == 2);
-                if !has_ns_delegation {
-                    debug!("QNAME minimization: no delegation found with {} label(s), jumping to full name",
-                        revealed_labels);
+            // Check delegation cache (walk from longest to second-most-specific suffix)
+            {
+                let mut dc = self.delegation_cache.lock().await;
+                if let Some(servers) = Self::find_cached_delegation(&mut dc, &name) {
+                    nameservers = servers;
+                    debug!(
+                        "delegation cache HIT for {} ({} servers)",
+                        name_str,
+                        nameservers.len()
+                    );
+                    // We already know the authoritative servers for this zone,
+                    // so QNAME minimization is unnecessary — reveal the full name.
                     revealed_labels = total_labels;
                 }
             }
 
-            debug!("iteration {}: no answer/delegation for {}, trying next servers", iteration, name_str);
-            if nameservers.len() > 1 {
-                nameservers.rotate_left(1);
-            }
-        }
+            for iteration in 0..MAX_ITERATIONS {
+                if nameservers.is_empty() {
+                    return Err(DnsError::Malformed("no nameservers to query"));
+                }
 
-        Err(DnsError::Malformed("maximum iterations exceeded"))
+                // Build minimized QNAME (RFC 7816):
+                // Reveal only labels up to `revealed_labels` from the right (closest to root).
+                // Start with just the TLD (e.g., "com"), then gradually add labels.
+                let minimized_name = if revealed_labels < total_labels {
+                    let qname = name_prefix(&name, revealed_labels);
+                    debug!(
+                        "QNAME minimization: {} (revealed {} of {} labels)",
+                        labels_to_string(&qname),
+                        revealed_labels,
+                        total_labels
+                    );
+                    qname
+                } else {
+                    // Full name
+                    name.clone()
+                };
+
+                // Build query (with EDNS0 OPT record if DNSSEC OK)
+                let id: u16 = rand::thread_rng().gen();
+                let dnssec_ok = self.dnssec_ok;
+                let query_bytes =
+                    Self::build_query_static(&minimized_name, rtype, rclass, id, dnssec_ok, false)?;
+
+                // Query ALL nameservers CONCURRENTLY
+                let msg = match self
+                    .query_servers_concurrent(&query_bytes, id, &nameservers)
+                    .await
+                {
+                    Some(m) => m,
+                    None => {
+                        debug!(
+                            "iteration {}: no server responded for {}",
+                            iteration, name_str
+                        );
+                        if nameservers.len() > 1 {
+                            nameservers.rotate_left(1);
+                        }
+                        continue;
+                    }
+                };
+
+                debug!(
+                    "[iter {}] response: tc={} qd={} an={} ns={} ar={} rcode={}",
+                    iteration,
+                    msg.header.tc,
+                    msg.header.qdcount,
+                    msg.header.ancount,
+                    msg.header.nscount,
+                    msg.header.arcount,
+                    msg.header.rcode
+                );
+
+                // Cache records from this response
+                self.cache_response(&msg).await;
+
+                // NXDOMAIN?
+                if msg.header.rcode == 3 {
+                    let (nx_ad, soa_records) = self
+                        .validate_negative_dnssec_response(&msg, &name, rclass, 0)
+                        .await;
+                    return Err(DnsError::NxDomain(soa_records, nx_ad));
+                }
+                if msg.header.rcode != 0 {
+                    debug!(
+                        "server returned rcode={} for {} (name={})",
+                        msg.header.rcode,
+                        name_str,
+                        labels_to_string(&minimized_name)
+                    );
+                    // If we're already using the full name and the server refuses,
+                    // try the next server rather than looping with the same query.
+                    if revealed_labels >= total_labels && nameservers.len() > 1 {
+                        nameservers.rotate_left(1);
+                    }
+                    continue;
+                }
+
+                // --- Look for direct answers ---
+                let direct: Vec<ResourceRecord> = msg
+                    .answers
+                    .iter()
+                    .filter(|r| domain_names_equal(&r.name, &name) && r.rtype == rtype)
+                    .cloned()
+                    .collect();
+
+                if !direct.is_empty() {
+                    // DNSSEC: collect RRSIG and DNSKEY records from the response.
+                    // The RD=1 fallback and validation run for all regular record types,
+                    // but are skipped for DNSSEC metadata types (RRSIG=46, DNSKEY=48, DS=43)
+                    // since those ARE the validation material and can't self-validate.
+                    let is_dnssec_meta = rtype == 46 || rtype == 48 || rtype == 43;
+                    if self.dnssec_ok && !is_dnssec_meta {
+                        let mut rrsigs: Vec<ResourceRecord> = msg
+                            .answers
+                            .iter()
+                            .chain(msg.authorities.iter())
+                            .filter(|r| r.rtype == 46)
+                            .cloned()
+                            .collect();
+                        let mut dnskeys: Vec<ResourceRecord> = msg
+                            .answers
+                            .iter()
+                            .chain(msg.authorities.iter())
+                            .filter(|r| r.rtype == 48)
+                            .cloned()
+                            .collect();
+
+                        // RD=1 fallback: if the iterative (RD=0) response didn't include
+                        // RRSIG/DNSKEY records, try a recursive query (RD=1) to the same
+                        // authoritative servers. Many auth servers only include DNSSEC
+                        // records when RD=1 is set.
+                        if (rrsigs.is_empty() || dnskeys.is_empty()) && !nameservers.is_empty() {
+                            debug!("RD=0 response lacks DNSSEC records for {}, trying RD=1 query to {} servers",
+                            name_str, nameservers.len());
+                            if let Some(rd1_msg) =
+                                self.query_rd1(&name, rtype, rclass, &nameservers).await
+                            {
+                                let rd1_rrsigs: Vec<ResourceRecord> = rd1_msg
+                                    .answers
+                                    .iter()
+                                    .chain(rd1_msg.authorities.iter())
+                                    .filter(|r| r.rtype == 46)
+                                    .cloned()
+                                    .collect();
+                                let rd1_dnskeys: Vec<ResourceRecord> = rd1_msg
+                                    .answers
+                                    .iter()
+                                    .chain(rd1_msg.authorities.iter())
+                                    .filter(|r| r.rtype == 48)
+                                    .cloned()
+                                    .collect();
+                                if !rd1_rrsigs.is_empty() || !rd1_dnskeys.is_empty() {
+                                    debug!(
+                                        "RD=1 query returned {} RRSIGs, {} DNSKEYs for {}",
+                                        rd1_rrsigs.len(),
+                                        rd1_dnskeys.len(),
+                                        name_str
+                                    );
+                                    if rrsigs.is_empty() {
+                                        rrsigs = rd1_rrsigs;
+                                    }
+                                    if dnskeys.is_empty() {
+                                        dnskeys = rd1_dnskeys;
+                                    }
+                                }
+                            }
+                        }
+
+                        // If we have RRSIGs but still no DNSKEYs after the RD=1
+                        // fallback, try a full recursive resolve for DNSKEY type 48.
+                        // Cloudflare and other CDNs often omit DNSKEYs from A/AAAA
+                        // responses even with DO=1, and the delegated/auth server
+                        // (e.g., dnscheck.tools web server) may REFUSE DNSKEY queries.
+                        // A full recursive resolve goes back to the zone's authoritative
+                        // nameservers (Cloudflare) which DO respond to type-48 queries.
+                        if !rrsigs.is_empty() && dnskeys.is_empty() {
+                            // Extract the zone name from the RRSIG's signer_name
+                            let zone_labels = rrsigs
+                                .iter()
+                                .find_map(|r| {
+                                    if let Some(RData::RRSIG { signer_name, .. }) = &r.parsed {
+                                        Some(signer_name.clone())
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .unwrap_or_else(|| name.clone());
+                            let zone_str = crate::dns::types::labels_to_string(&zone_labels);
+                            debug!(
+                                "No DNSKEYs in response for {}; resolving {} type=48",
+                                name_str, zone_str
+                            );
+                            match self.resolve(&zone_str, 48, rclass).await {
+                                Ok(records) if !records.is_empty() => {
+                                    debug!(
+                                        "DNSKEY resolve returned {} records for zone {}",
+                                        records.len(),
+                                        zone_str
+                                    );
+                                    dnskeys = records;
+                                    // Also fetch DNSKEY RRSIGs from cache (they were cached during the resolve)
+                                    let dnskey_rrsigs_cached =
+                                        self.resolve_dnssec(&zone_str, 46, rclass).await;
+                                    if !dnskey_rrsigs_cached.is_empty() {
+                                        debug!("Fetched {} DNSKEY RRSIGs from cache for chain validation",
+                                        dnskey_rrsigs_cached.len());
+                                        // Merge with existing rrsigs (avoid duplicates by name+rdata)
+                                        for rr in dnskey_rrsigs_cached {
+                                            // Check type_covered from parsed data or raw RDATA
+                                            let tc =
+                                                if let Some(RData::RRSIG { type_covered, .. }) =
+                                                    &rr.parsed
+                                                {
+                                                    Some(*type_covered)
+                                                } else if rr.rtype == 46 && rr.rdata.len() >= 2 {
+                                                    Some(u16::from_be_bytes([
+                                                        rr.rdata[0],
+                                                        rr.rdata[1],
+                                                    ]))
+                                                } else {
+                                                    None
+                                                };
+                                            if tc == Some(48)
+                                                && !rrsigs.iter().any(|r| {
+                                                    r.rtype == 46
+                                                        && r.name == rr.name
+                                                        && r.rdata == rr.rdata
+                                                })
+                                            {
+                                                rrsigs.push(rr);
+                                            }
+                                        }
+                                    }
+                                }
+                                _ => debug!("DNSKEY resolve failed for zone {}", zone_str),
+                            }
+                        }
+
+                        let vresult = self.validate_dnssec(&direct, &rrsigs, &dnskeys);
+                        match vresult {
+                            crate::dnssec::ValidationResult::Secure => {
+                                debug!("DNSSEC validation PASSED for {}", name_str);
+                                ad_bit = true;
+                            }
+                            crate::dnssec::ValidationResult::Bogus(reason) => {
+                                warn!(
+                                    "DNSSEC validation FAILED for {}: {} — REJECTING",
+                                    name_str, reason
+                                );
+                                return Err(DnsError::Malformed(
+                                    "DNSSEC validation failed: signature invalid or expired",
+                                ));
+                            }
+                            crate::dnssec::ValidationResult::Insecure => {
+                                debug!("DNSSEC: zone is insecure (no DS), accepting {}", name_str);
+                            }
+                            crate::dnssec::ValidationResult::Indeterminate => {
+                                debug!(
+                                    "DNSSEC validation indeterminate for {} (no DNSSEC data)",
+                                    name_str
+                                );
+                                if !dnskeys.is_empty() && rrsigs.is_empty() {
+                                    warn!(
+                                        "{}: DNSKEYs present but no RRSIGs — REJECTING",
+                                        name_str
+                                    );
+                                    return Err(DnsError::Malformed(
+                                        "DNSSEC: DNSKEYs without RRSIGs for signed zone",
+                                    ));
+                                }
+                                // Missing signature check: if the zone has DS records (parent says
+                                // it's signed) but the response has no RRSIGs at all, reject.
+                                if rrsigs.is_empty() && total_labels >= 2 {
+                                    // Walk up labels to find if any parent zone has DS records.
+                                    // The delegation response cached DS records from the parent zone.
+                                    let mut check_labels = total_labels - 1; // strip first label
+                                    while check_labels >= 2 {
+                                        let zone_bytes = name_prefix(&name, check_labels);
+                                        let zone_str = labels_to_string(&zone_bytes);
+                                        let ds_records =
+                                            self.resolve_dnssec(&zone_str, 43, rclass).await;
+                                        if !ds_records.is_empty() {
+                                            warn!("{}: DS records found for {} but response has no RRSIGs — REJECTING",
+                                            name_str, zone_str);
+                                            return Err(DnsError::Malformed(
+                                                "DNSSEC: signed zone returned unsigned answer",
+                                            ));
+                                        }
+                                        check_labels -= 1;
+                                    }
+                                }
+                            }
+                        }
+
+                        // Chain-of-trust validation: validate DNSKEY records up to the root
+                        if !dnskeys.is_empty() {
+                            // Extract signer name from DNSKEY RRSIGs.
+                            // Handle both parsed records (from direct response) and unparsed
+                            // records (from cache, parsed: None) by reading raw RDATA.
+                            fn rrsig_type_covered(r: &ResourceRecord) -> Option<u16> {
+                                if let Some(RData::RRSIG { type_covered, .. }) = &r.parsed {
+                                    return Some(*type_covered);
+                                }
+                                // Read from raw RDATA: first 2 bytes are type_covered
+                                if r.rtype == 46 && r.rdata.len() >= 2 {
+                                    Some(u16::from_be_bytes([r.rdata[0], r.rdata[1]]))
+                                } else {
+                                    None
+                                }
+                            }
+                            fn rrsig_signer_name(r: &ResourceRecord) -> Option<Vec<u8>> {
+                                if let Some(RData::RRSIG { signer_name, .. }) = &r.parsed {
+                                    return Some(signer_name.clone());
+                                }
+                                // Read from raw RDATA: skip type_covered(2)+algorithm(1)+labels(1)+original_ttl(4)+expiration(4)+inception(4)+key_tag(2)
+                                // = 18 bytes header, then signer_name as compressed domain name
+                                if r.rtype == 46 && r.rdata.len() > 18 {
+                                    let signer_start = 18;
+                                    let signer_end = r.rdata.len();
+                                    // The signer_name is a domain name in uncompressed wire format
+                                    let mut name = Vec::new();
+                                    let mut pos = signer_start;
+                                    while pos < signer_end {
+                                        let len = r.rdata[pos] as usize;
+                                        if len == 0 {
+                                            name.push(0); // root label
+                                            break;
+                                        }
+                                        if pos + 1 + len > signer_end {
+                                            break;
+                                        }
+                                        name.push(r.rdata[pos]);
+                                        name.extend_from_slice(&r.rdata[pos + 1..pos + 1 + len]);
+                                        pos += 1 + len;
+                                        if len == 0 {
+                                            break;
+                                        }
+                                    }
+                                    if !name.is_empty() {
+                                        Some(name)
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                }
+                            }
+
+                            let dnskey_rrsigs: Vec<&ResourceRecord> = rrsigs
+                                .iter()
+                                .filter(|r| rrsig_type_covered(r) == Some(48))
+                                .collect();
+
+                            if !dnskey_rrsigs.is_empty() {
+                                // Use the first DNSKEY's owner name as the zone
+                                let zone = &dnskeys[0].name;
+                                // Get signer_name from the first DNSKEY RRSIG
+                                let signer = rrsig_signer_name(dnskey_rrsigs[0])
+                                    .unwrap_or_else(|| zone.clone());
+                                let chain_result = self
+                                    .validate_dnssec_chain(zone, &dnskeys, &rrsigs, &signer, 0)
+                                    .await;
+                                match chain_result {
+                                    crate::dnssec::ValidationResult::Secure => {
+                                        debug!("DNSSEC chain-of-trust PASSED for {}", name_str);
+                                    }
+                                    crate::dnssec::ValidationResult::Insecure => {
+                                        debug!("DNSSEC chain-of-trust: zone {} is insecure (no DS in parent), accepting", name_str);
+                                    }
+                                    crate::dnssec::ValidationResult::Bogus(reason) => {
+                                        // Chain-of-trust failure is logged but does NOT affect
+                                        // the AD bit or the response. The basic RRSIG validation
+                                        // already passed, and many zones have DS/DNSKEY mismatches
+                                        // due to rollovers or partial cache. Full chain validation
+                                        // will be strengthened in a future release.
+                                        debug!("DNSSEC chain-of-trust FAILED for {}: {} — ignored (basic validation passed)", name_str, reason);
+                                    }
+                                    _ => debug!(
+                                        "DNSSEC chain-of-trust indeterminate for {}",
+                                        name_str
+                                    ),
+                                }
+                            } else {
+                                debug!(
+                                    "No DNSKEY RRSIGs found for chain validation of {}",
+                                    name_str
+                                );
+                            }
+                        }
+                    }
+                    self.cache_delegation(&name, &nameservers).await;
+                    return Ok((direct, ad_bit));
+                }
+
+                // --- CNAME chase ---
+                let cnames: Vec<ResourceRecord> = msg
+                    .answers
+                    .iter()
+                    .filter(|r| domain_names_equal(&r.name, &name) && r.rtype == 5)
+                    .cloned()
+                    .collect();
+
+                if !cnames.is_empty() {
+                    if let Some(RData::CNAME(target)) = &cnames[0].parsed {
+                        debug!("CNAME {} → {}", name_str, labels_to_string(target));
+                        let (sub_records, sub_ad) = self
+                            .resolve_recursive(target.clone(), rtype, rclass, depth + 1, true)
+                            .await?;
+                        let mut all = vec![cnames.into_iter().next().unwrap()];
+                        all.extend(sub_records);
+                        self.cache_delegation(&name, &nameservers).await;
+                        return Ok((all, ad_bit || sub_ad));
+                    }
+                    // Fallback: try to parse raw rdata
+                    let raw_target = &cnames[0].rdata;
+                    if !raw_target.is_empty() {
+                        let target_str = labels_to_string(raw_target);
+                        debug!("CNAME (raw) {} → {}", name_str, target_str);
+                        let (sub_records, sub_ad) = self
+                            .resolve_recursive(raw_target.to_vec(), rtype, rclass, depth + 1, true)
+                            .await?;
+                        let mut all = vec![cnames.into_iter().next().unwrap()];
+                        all.extend(sub_records);
+                        self.cache_delegation(&name, &nameservers).await;
+                        return Ok((all, ad_bit || sub_ad));
+                    }
+                }
+
+                // --- NS Authority referral ---
+                let ns_records: Vec<&ResourceRecord> =
+                    msg.authorities.iter().filter(|r| r.rtype == 2).collect();
+
+                if !ns_records.is_empty() {
+                    let mut new_servers = Vec::new();
+                    let mut ns_to_resolve = Vec::new();
+
+                    for ns in &ns_records {
+                        let ns_name_bytes = match &ns.parsed {
+                            Some(RData::NS(name)) => name.clone(),
+                            _ => ns.rdata.clone(),
+                        };
+
+                        // Glue in additional section?
+                        let glue: Vec<&ResourceRecord> = msg
+                            .additionals
+                            .iter()
+                            .filter(|r| {
+                                domain_names_equal(&r.name, &ns_name_bytes)
+                                    && (r.rtype == 1 || (self.enable_ipv6 && r.rtype == 28))
+                            })
+                            .collect();
+
+                        if !glue.is_empty() {
+                            for g in glue {
+                                match &g.parsed {
+                                    Some(RData::A(ip)) => new_servers.push(IpAddr::V4(*ip)),
+                                    Some(RData::AAAA(ip)) if self.enable_ipv6 => {
+                                        new_servers.push(IpAddr::V6(*ip))
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        } else if let Some(cached) = self.ns_cache.lock().await.get(&ns_name_bytes)
+                        {
+                            new_servers.extend(cached.iter().copied());
+                        } else {
+                            ns_to_resolve.push(ns_name_bytes);
+                        }
+                    }
+
+                    // Resolve NS names without glue — CONCURRENTLY using tokio::spawn
+                    if !ns_to_resolve.is_empty() {
+                        let resolve_results = self
+                            .resolve_ns_names_concurrently(&ns_to_resolve, rclass, depth)
+                            .await;
+                        for (ns_name, ips) in resolve_results {
+                            if !ips.is_empty() {
+                                self.ns_cache.lock().await.put(ns_name.clone(), ips.clone());
+                                new_servers.extend(ips);
+                            }
+                        }
+                    }
+
+                    if !new_servers.is_empty() {
+                        // Cache the zone → NS IPs delegation so brother tasks
+                        // resolving other names in the same zone can skip root.
+                        if let Some(zone) = ns_records.first().map(|r| &r.name) {
+                            self.cache_delegation(zone, &new_servers).await;
+                            debug!("zone delegation cached: {}", labels_to_string(zone));
+                        }
+                        nameservers = new_servers;
+                        // QNAME minimization: reveal one more label after following a delegation
+                        if revealed_labels < total_labels {
+                            revealed_labels += 1;
+                            debug!(
+                                "QNAME minimization: now revealing {} of {} labels",
+                                revealed_labels, total_labels
+                            );
+                        }
+                        debug!(
+                            "iteration {}: following delegation for {}",
+                            iteration, name_str
+                        );
+                        continue;
+                    }
+                }
+
+                // --- SOA negative response ---
+                // NODATA (NOERROR with SOA) means the zone exists but the requested
+                // record type doesn't. This is a valid response, not an error.
+                // Only treat as NXDOMAIN if the SOA owner name matches the query name
+                // AND RCODE is 3 (NXDOMAIN). RCODE=0 with SOA = NODATA (success, empty answer).
+                let soa: Vec<&ResourceRecord> =
+                    msg.authorities.iter().filter(|r| r.rtype == 6).collect();
+                if !soa.is_empty() {
+                    debug!(
+                        "iteration {}: SOA (negative) response for {}, {} SOA records",
+                        iteration,
+                        name_str,
+                        soa.len()
+                    );
+                    // Only error if the SOA owner name matches the query name (NXDOMAIN)
+                    // AND rcode == 3. NODATA (rcode=0) is a valid empty response.
+                    if msg.header.rcode == 3
+                        && soa.iter().any(|r| domain_names_equal(&r.name, &name))
+                    {
+                        let owned_soa: Vec<ResourceRecord> =
+                            soa.iter().map(|r| (*r).clone()).collect();
+                        return Err(DnsError::NxDomain(owned_soa, false));
+                    }
+                    // NODATA (rcode=0): domain exists but no matching record type.
+                    // Return empty answer to the client.
+                    if msg.header.rcode == 0 {
+                        debug!("NODATA response for {} — returning empty answer", name_str);
+                        // Validate DNSSEC for this negative response
+                        // The AD bit is set from negative DNSSEC validation (NSEC/NSEC3 chain)
+                        let (neg_ad, _) = self
+                            .validate_negative_dnssec_response(&msg, &name, rclass, rtype)
+                            .await;
+                        let final_ad = ad_bit || neg_ad;
+                        // Try to return empty answer if we're at the authoritative server
+                        // (i.e., we followed the delegation chain and this is the final answer)
+                        return Ok((Vec::new(), final_ad));
+                    }
+                }
+
+                // QNAME minimization: if we're using a shortened name and didn't get a
+                // delegation (no NS records in authority), jump to the full name.
+                // This handles the case where an intermediate name (e.g., "awsdns-01.net")
+                // is a regular hostname rather than a delegation zone.
+                if revealed_labels < total_labels {
+                    let has_ns_delegation = msg.authorities.iter().any(|r| r.rtype == 2);
+                    if !has_ns_delegation {
+                        debug!("QNAME minimization: no delegation found with {} label(s), jumping to full name",
+                        revealed_labels);
+                        revealed_labels = total_labels;
+                    }
+                }
+
+                debug!(
+                    "iteration {}: no answer/delegation for {}, trying next servers",
+                    iteration, name_str
+                );
+                if nameservers.len() > 1 {
+                    nameservers.rotate_left(1);
+                }
+            }
+
+            Err(DnsError::Malformed("maximum iterations exceeded"))
         })
     }
 
@@ -1140,7 +1301,14 @@ impl RecursiveResolver {
     /// Always includes EDNS0 with EDNS0-payload-byte UDP payload to prevent truncation.
     /// Sets DNSSEC OK bit only when explicitly enabled.
     /// `recursive` controls the RD (recursion desired) flag.
-    fn build_query_static(name: &[u8], rtype: u16, rclass: u16, id: u16, dnssec_ok: bool, recursive: bool) -> DnsResult<Vec<u8>> {
+    fn build_query_static(
+        name: &[u8],
+        rtype: u16,
+        rclass: u16,
+        id: u16,
+        dnssec_ok: bool,
+        recursive: bool,
+    ) -> DnsResult<Vec<u8>> {
         let question = Question {
             qname: name.to_vec(),
             qtype: rtype,
@@ -1172,13 +1340,20 @@ impl RecursiveResolver {
     /// Send a DNS query WITH RD=1 (recursive desired) to specified servers.
     /// Used for DNSSEC record retrieval when iterative responses lack RRSIG/DNSKEY.
     /// Sends to the first responsive server and returns the parsed message.
-    async fn query_rd1(&self, name: &[u8], rtype: u16, rclass: u16, servers: &[IpAddr]) -> Option<Message> {
+    async fn query_rd1(
+        &self,
+        name: &[u8],
+        rtype: u16,
+        rclass: u16,
+        servers: &[IpAddr],
+    ) -> Option<Message> {
         if servers.is_empty() {
             return None;
         }
         let id: u16 = rand::thread_rng().gen();
         let query_bytes = Self::build_query_static(name, rtype, rclass, id, true, true).ok()?;
-        self.query_servers_concurrent(&query_bytes, id, servers).await
+        self.query_servers_concurrent(&query_bytes, id, servers)
+            .await
     }
 
     /// Query ALL servers CONCURRENTLY using separate UDP sockets per server.
@@ -1207,7 +1382,9 @@ impl RecursiveResolver {
             sorted_servers.sort_by(|a, b| {
                 let a_rtt = rtt_cache.get(a).map(|(rtt, _)| *rtt).unwrap_or(500.0);
                 let b_rtt = rtt_cache.get(b).map(|(rtt, _)| *rtt).unwrap_or(500.0);
-                a_rtt.partial_cmp(&b_rtt).unwrap_or(std::cmp::Ordering::Equal)
+                a_rtt
+                    .partial_cmp(&b_rtt)
+                    .unwrap_or(std::cmp::Ordering::Equal)
             });
         }
 
@@ -1231,7 +1408,8 @@ impl RecursiveResolver {
                             // Record RTT (estimate: use TCP connect time)
                             if let Ok(Some(rtt_ms)) = measure_tcp_rtt(&q, server).await {
                                 let mut rtt_cache = rtt_rec.lock().await;
-                                let smoothed = rtt_cache.get(&server)
+                                let smoothed = rtt_cache
+                                    .get(&server)
                                     .map(|(avg, _last)| avg * 0.7 + rtt_ms * 0.3)
                                     .unwrap_or(rtt_ms);
                                 rtt_cache.put(server, (smoothed, Instant::now()));
@@ -1280,7 +1458,8 @@ impl RecursiveResolver {
                 if msg.is_some() {
                     let rtt_ms = send_start.elapsed().as_secs_f64() * 1000.0;
                     let mut rtt_cache = rtt_rec.lock().await;
-                    let smoothed = rtt_cache.get(&server)
+                    let smoothed = rtt_cache
+                        .get(&server)
                         .map(|(avg, _last)| avg * 0.7 + rtt_ms * 0.3)
                         .unwrap_or(rtt_ms);
                     rtt_cache.put(server, (smoothed, Instant::now()));
@@ -1291,8 +1470,12 @@ impl RecursiveResolver {
             handles.push(handle);
         }
 
-        let mut futs: Vec<Pin<Box<dyn Future<Output = Result<Option<Message>, tokio::task::JoinError>> + Send>>> =
-            handles.into_iter().map(|h| Box::pin(h) as Pin<Box<dyn Future<Output = _> + Send>>).collect();
+        let mut futs: Vec<
+            Pin<Box<dyn Future<Output = Result<Option<Message>, tokio::task::JoinError>> + Send>>,
+        > = handles
+            .into_iter()
+            .map(|h| Box::pin(h) as Pin<Box<dyn Future<Output = _> + Send>>)
+            .collect();
 
         while !futs.is_empty() {
             let (result, _idx, remaining) = select_all(futs).await;
@@ -1323,15 +1506,17 @@ impl RecursiveResolver {
                 let resolver = self.clone_no_dnssec();
                 let name = ns_name.clone();
                 async move {
-                    let ips = match resolver.resolve_recursive(name.clone(), 1, rclass, depth + 1, false).await {
-                        Ok((records, _ad)) => {
-                            records.iter()
-                                .filter_map(|r| match &r.parsed {
-                                    Some(RData::A(ip)) => Some(IpAddr::V4(*ip)),
-                                    _ => None,
-                                })
-                                .collect::<Vec<_>>()
-                        }
+                    let ips = match resolver
+                        .resolve_recursive(name.clone(), 1, rclass, depth + 1, false)
+                        .await
+                    {
+                        Ok((records, _ad)) => records
+                            .iter()
+                            .filter_map(|r| match &r.parsed {
+                                Some(RData::A(ip)) => Some(IpAddr::V4(*ip)),
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>(),
                         Err(_) => Vec::new(),
                     };
                     (name, ips)
@@ -1432,7 +1617,12 @@ impl RecursiveResolver {
     // ---------------------------------------------------------------
 
     /// Resolve a domain using DoH (DNS-over-HTTPS).
-    pub async fn resolve_via_doh(&self, name: &str, rtype: u16, rclass: u16) -> DnsResult<Vec<ResourceRecord>> {
+    pub async fn resolve_via_doh(
+        &self,
+        name: &str,
+        rtype: u16,
+        rclass: u16,
+    ) -> DnsResult<Vec<ResourceRecord>> {
         let encoded_name = encode_domain_name(name)?;
 
         {
@@ -1445,7 +1635,8 @@ impl RecursiveResolver {
         let id: u16 = rand::thread_rng().gen();
         let query_bytes = self.build_query(&encoded_name, rtype, rclass, id)?;
 
-        let response_data = crate::transport::doh::doh_query_with_fallback(&query_bytes).await
+        let response_data = crate::transport::doh::doh_query_with_fallback(&query_bytes)
+            .await
             .map_err(|e| DnsError::Transport(format!("DoH failed: {}", e)))?;
 
         let response = decode_message(&response_data)
@@ -1455,7 +1646,10 @@ impl RecursiveResolver {
             return Err(DnsError::NxDomain(Vec::new(), false));
         }
         if response.header.rcode != 0 {
-            return Err(DnsError::Transport(format!("DoH returned rcode={}", response.header.rcode)));
+            return Err(DnsError::Transport(format!(
+                "DoH returned rcode={}",
+                response.header.rcode
+            )));
         }
 
         let records: Vec<ResourceRecord> = response
@@ -1476,11 +1670,19 @@ impl RecursiveResolver {
 
     /// Try UDP iteratively first, fall back to DoH.
     #[allow(dead_code)]
-    pub async fn resolve_with_fallback(&self, name: &str, rtype: u16, rclass: u16) -> DnsResult<Vec<ResourceRecord>> {
+    pub async fn resolve_with_fallback(
+        &self,
+        name: &str,
+        rtype: u16,
+        rclass: u16,
+    ) -> DnsResult<Vec<ResourceRecord>> {
         match self.resolve(name, rtype, rclass).await {
             Ok(records) => Ok(records),
             Err(udp_err) => {
-                debug!("UDP resolution failed for {}, trying DoH fallback: {:?}", name, udp_err);
+                debug!(
+                    "UDP resolution failed for {}, trying DoH fallback: {:?}",
+                    name, udp_err
+                );
                 self.resolve_via_doh(name, rtype, rclass).await
             }
         }
@@ -1528,9 +1730,12 @@ impl RecursiveResolver {
             }
             if r.rtype == 46 && r.rdata.len() >= 2 {
                 Some(u16::from_be_bytes([r.rdata[0], r.rdata[1]]))
-            } else { None }
+            } else {
+                None
+            }
         }
-        let dnskey_rrsigs: Vec<&ResourceRecord> = rrsigs.iter()
+        let dnskey_rrsigs: Vec<&ResourceRecord> = rrsigs
+            .iter()
             .filter(|r| rrsig_type_covered(r) == Some(48))
             .collect();
 
@@ -1571,14 +1776,16 @@ impl RecursiveResolver {
         signer_name: &[u8],
         depth: usize,
     ) -> crate::dnssec::ValidationResult {
+        use crate::dns::types::RData;
         use crate::dnssec::{
             is_root_zone, parent_zone, validate_dnskeys_against_ds,
             validate_dnskeys_against_root_anchor,
         };
-        use crate::dns::types::RData;
 
         if depth > 10 {
-            return crate::dnssec::ValidationResult::Bogus("Chain-of-trust depth exceeded".to_string());
+            return crate::dnssec::ValidationResult::Bogus(
+                "Chain-of-trust depth exceeded".to_string(),
+            );
         }
 
         // First, validate the DNSKEY RRSIG with the signer's DNSKEY
@@ -1589,15 +1796,18 @@ impl RecursiveResolver {
             }
             if r.rtype == 46 && r.rdata.len() >= 2 {
                 Some(u16::from_be_bytes([r.rdata[0], r.rdata[1]]))
-            } else { None }
+            } else {
+                None
+            }
         }
-        let dnskey_rrsigs: Vec<&ResourceRecord> = rrsigs.iter()
+        let dnskey_rrsigs: Vec<&ResourceRecord> = rrsigs
+            .iter()
             .filter(|r| rrsig_type_covered_inner(r) == Some(48))
             .collect();
 
         if dnskey_rrsigs.is_empty() {
             return crate::dnssec::ValidationResult::Bogus(
-                "No DNSKEY RRSIG found for chain validation".to_string()
+                "No DNSKEY RRSIG found for chain validation".to_string(),
             );
         }
 
@@ -1609,7 +1819,7 @@ impl RecursiveResolver {
                 return crate::dnssec::ValidationResult::Secure;
             }
             return crate::dnssec::ValidationResult::Bogus(
-                "Root DNSKEY does not match trust anchor".to_string()
+                "Root DNSKEY does not match trust anchor".to_string(),
             );
         }
 
@@ -1620,8 +1830,11 @@ impl RecursiveResolver {
             None => vec![0], // root
         };
         let zone_str = crate::dns::types::labels_to_string(zone_name);
-        debug!("Validating chain for {} via parent zone {}", zone_str,
-            crate::dns::types::labels_to_string(&parent_zone));
+        debug!(
+            "Validating chain for {} via parent zone {}",
+            zone_str,
+            crate::dns::types::labels_to_string(&parent_zone)
+        );
         let ds_result = self.query_ds_records(zone_name, &parent_zone).await;
         let (_ds_records, ds_rrsigs, parent_dnskeys) = match ds_result {
             Some(r) => r,
@@ -1636,9 +1849,10 @@ impl RecursiveResolver {
 
         // Step 3: Validate child DNSKEY against parent DS
         if !validate_dnskeys_against_ds(dnskeys, &_ds_records) {
-            return crate::dnssec::ValidationResult::Bogus(
-                format!("No DNSKEY for {} matches parent DS records", zone_str)
-            );
+            return crate::dnssec::ValidationResult::Bogus(format!(
+                "No DNSKEY for {} matches parent DS records",
+                zone_str
+            ));
         }
         debug!("✓ DNSKEY for {} matches parent DS", zone_str);
 
@@ -1646,12 +1860,13 @@ impl RecursiveResolver {
         for rrsig in &ds_rrsigs {
             let result = crate::dnssec::validate_rrset(rrsig, &_ds_records, &parent_dnskeys);
             match result {
-                crate::dnssec::ValidationResult::Secure => {},
-                crate::dnssec::ValidationResult::Indeterminate => {},
+                crate::dnssec::ValidationResult::Secure => {}
+                crate::dnssec::ValidationResult::Indeterminate => {}
                 other => {
-                    return crate::dnssec::ValidationResult::Bogus(
-                        format!("DS RRSIG validation failed for {}: {:?}", zone_str, other)
-                    );
+                    return crate::dnssec::ValidationResult::Bogus(format!(
+                        "DS RRSIG validation failed for {}: {:?}",
+                        zone_str, other
+                    ));
                 }
             }
         }
@@ -1668,14 +1883,18 @@ impl RecursiveResolver {
             Some(r) => r,
             None => {
                 // If we can't get parent DNSKEY records, check if the parent is root
-                if is_root_zone(&parent_zone) && validate_dnskeys_against_root_anchor(&parent_dnskeys) {
+                if is_root_zone(&parent_zone)
+                    && validate_dnskeys_against_root_anchor(&parent_dnskeys)
+                {
                     debug!("✓ Chain complete: parent is root, validated against trust anchor");
                     return crate::dnssec::ValidationResult::Secure;
                 }
                 // If the parent has DS records but we can't get DNSKEYs, this is
                 // Indeterminate — we can't complete the chain, but it's not provably Bogus.
-                debug!("Could not obtain DNSKEY records for parent zone {}, chain indeterminate",
-                    parent_zone_str);
+                debug!(
+                    "Could not obtain DNSKEY records for parent zone {}, chain indeterminate",
+                    parent_zone_str
+                );
                 return crate::dnssec::ValidationResult::Indeterminate;
             }
         };
@@ -1697,7 +1916,8 @@ impl RecursiveResolver {
             &parent_dnskey_rrsigs,
             &parent_signer,
             depth + 1,
-        )).await
+        ))
+        .await
     }
 
     /// Query a zone for DS records (type 43) for a child zone.
@@ -1706,7 +1926,11 @@ impl RecursiveResolver {
         &self,
         child_name: &[u8],
         parent_zone: &[u8],
-    ) -> Option<(Vec<ResourceRecord>, Vec<ResourceRecord>, Vec<ResourceRecord>)> {
+    ) -> Option<(
+        Vec<ResourceRecord>,
+        Vec<ResourceRecord>,
+        Vec<ResourceRecord>,
+    )> {
         // Build a query for DS records of the child name
         let id: u16 = rand::thread_rng().gen();
         let dnssec_ok = true;
@@ -1718,10 +1942,14 @@ impl RecursiveResolver {
             return None;
         }
 
-        let msg = self.query_servers_concurrent(&query_bytes, id, &nameservers).await?;
+        let msg = self
+            .query_servers_concurrent(&query_bytes, id, &nameservers)
+            .await?;
 
         // Extract DS records from answers
-        let ds_records: Vec<ResourceRecord> = msg.answers.iter()
+        let ds_records: Vec<ResourceRecord> = msg
+            .answers
+            .iter()
             .filter(|r| r.rtype == 43)
             .cloned()
             .collect();
@@ -1731,14 +1959,18 @@ impl RecursiveResolver {
         }
 
         // Extract RRSIGs covering DS
-        let ds_rrsigs: Vec<ResourceRecord> = msg.answers.iter()
+        let ds_rrsigs: Vec<ResourceRecord> = msg
+            .answers
+            .iter()
             .chain(msg.authorities.iter())
             .filter(|r| r.rtype == 46)
             .cloned()
             .collect();
 
         // Extract DNSKEY records from authority/additional
-        let parent_dnskeys: Vec<ResourceRecord> = msg.authorities.iter()
+        let parent_dnskeys: Vec<ResourceRecord> = msg
+            .authorities
+            .iter()
             .chain(msg.additionals.iter())
             .filter(|r| r.rtype == 48)
             .cloned()
@@ -1762,9 +1994,13 @@ impl RecursiveResolver {
             return None;
         }
 
-        let msg = self.query_servers_concurrent(&query_bytes, id, &nameservers).await?;
+        let msg = self
+            .query_servers_concurrent(&query_bytes, id, &nameservers)
+            .await?;
 
-        let dnskeys: Vec<ResourceRecord> = msg.answers.iter()
+        let dnskeys: Vec<ResourceRecord> = msg
+            .answers
+            .iter()
             .filter(|r| r.rtype == 48)
             .cloned()
             .collect();
@@ -1773,7 +2009,9 @@ impl RecursiveResolver {
             return None;
         }
 
-        let dnskey_rrsigs: Vec<ResourceRecord> = msg.answers.iter()
+        let dnskey_rrsigs: Vec<ResourceRecord> = msg
+            .answers
+            .iter()
             .chain(msg.authorities.iter())
             .filter(|r| r.rtype == 46)
             .cloned()
@@ -1824,12 +2062,13 @@ impl RecursiveResolver {
         };
 
         // Start with root servers
-        let ns = self.query_servers_concurrent(&query_bytes, id, &root_hints::initial_root_addrs()).await;
+        let ns = self
+            .query_servers_concurrent(&query_bytes, id, &root_hints::initial_root_addrs())
+            .await;
         let Some(msg) = ns else { return Vec::new() };
 
-        let ns_records: Vec<&ResourceRecord> = msg.authorities.iter()
-            .filter(|r| r.rtype == 2)
-            .collect();
+        let ns_records: Vec<&ResourceRecord> =
+            msg.authorities.iter().filter(|r| r.rtype == 2).collect();
 
         if ns_records.is_empty() {
             return Vec::new();
@@ -1842,8 +2081,12 @@ impl RecursiveResolver {
                 _ => continue,
             };
             // Check glue
-            let glue: Vec<&ResourceRecord> = msg.additionals.iter()
-                .filter(|r| domain_names_equal(&r.name, &ns_name) && (r.rtype == 1 || r.rtype == 28))
+            let glue: Vec<&ResourceRecord> = msg
+                .additionals
+                .iter()
+                .filter(|r| {
+                    domain_names_equal(&r.name, &ns_name) && (r.rtype == 1 || r.rtype == 28)
+                })
                 .collect();
             for g in &glue {
                 match &g.parsed {
@@ -1880,25 +2123,33 @@ impl RecursiveResolver {
         rclass: u16,
         qtype: u16,
     ) -> (bool, Vec<ResourceRecord>) {
-        let soa_records: Vec<ResourceRecord> = msg.authorities.iter()
+        let soa_records: Vec<ResourceRecord> = msg
+            .authorities
+            .iter()
             .filter(|r| r.rtype == 6)
             .cloned()
             .collect();
 
         // Extract RRSIG records from authority
-        let rrsigs: Vec<ResourceRecord> = msg.authorities.iter()
+        let rrsigs: Vec<ResourceRecord> = msg
+            .authorities
+            .iter()
             .filter(|r| r.rtype == 46)
             .cloned()
             .collect();
 
         // Extract NSEC records (type 47) from authority
-        let nsec_records: Vec<ResourceRecord> = msg.authorities.iter()
+        let nsec_records: Vec<ResourceRecord> = msg
+            .authorities
+            .iter()
             .filter(|r| r.rtype == 47)
             .cloned()
             .collect();
 
         // Extract NSEC3 records (type 50) from authority
-        let nsec3_records: Vec<ResourceRecord> = msg.authorities.iter()
+        let nsec3_records: Vec<ResourceRecord> = msg
+            .authorities
+            .iter()
             .filter(|r| r.rtype == 50)
             .cloned()
             .collect();
@@ -1908,7 +2159,8 @@ impl RecursiveResolver {
         }
 
         // Determine the zone name: use the SOA owner name, or fall back to the query name
-        let zone_name = soa_records.first()
+        let zone_name = soa_records
+            .first()
             .map(|r| r.name.clone())
             .unwrap_or_else(|| name.to_vec());
         let zone_str = crate::dns::types::labels_to_string(&zone_name);
@@ -1916,8 +2168,11 @@ impl RecursiveResolver {
         // Resolve DNSKEY records for the zone
         let dnskeys: Vec<ResourceRecord> = match self.resolve(&zone_str, 48, rclass).await {
             Ok(records) if !records.is_empty() => {
-                debug!("validate_negative_dnssec: resolved {} DNSKEYs for zone {}",
-                    records.len(), zone_str);
+                debug!(
+                    "validate_negative_dnssec: resolved {} DNSKEYs for zone {}",
+                    records.len(),
+                    zone_str
+                );
                 records
             }
             _ => {
@@ -1932,8 +2187,13 @@ impl RecursiveResolver {
         }
 
         let vresult = crate::dnssec::validate_negative_dnssec(
-            &soa_records, &nsec_records, &nsec3_records,
-            &rrsigs, &dnskeys, name, qtype,
+            &soa_records,
+            &nsec_records,
+            &nsec3_records,
+            &rrsigs,
+            &dnskeys,
+            name,
+            qtype,
         );
 
         match vresult {
@@ -1942,7 +2202,10 @@ impl RecursiveResolver {
                 (true, soa_records)
             }
             crate::dnssec::ValidationResult::Bogus(reason) => {
-                debug!("validate_negative_dnssec: BOGUS for {}: {}", zone_str, reason);
+                debug!(
+                    "validate_negative_dnssec: BOGUS for {}: {}",
+                    zone_str, reason
+                );
                 (false, soa_records)
             }
             _ => {
@@ -1971,7 +2234,9 @@ async fn query_via_tcp_pool(
             None => {
                 let addr = SocketAddr::new(server, DNS_PORT);
                 timeout(QUERY_TIMEOUT, TcpStream::connect(addr))
-                    .await.ok()?.ok()?
+                    .await
+                    .ok()?
+                    .ok()?
             }
         }
     };
@@ -1985,7 +2250,11 @@ async fn query_via_tcp_pool(
     if timeout(QUERY_TIMEOUT, async {
         use tokio::io::AsyncWriteExt;
         stream.write_all(&framed).await
-    }).await.ok()?.is_err() {
+    })
+    .await
+    .ok()?
+    .is_err()
+    {
         return None;
     }
 
@@ -1994,7 +2263,11 @@ async fn query_via_tcp_pool(
     if timeout(QUERY_TIMEOUT, async {
         use tokio::io::AsyncReadExt;
         stream.read_exact(&mut len_buf).await
-    }).await.ok()?.is_err() {
+    })
+    .await
+    .ok()?
+    .is_err()
+    {
         return None;
     }
     let response_len = u16::from_be_bytes(len_buf) as usize;
@@ -2007,7 +2280,11 @@ async fn query_via_tcp_pool(
     if timeout(QUERY_TIMEOUT, async {
         use tokio::io::AsyncReadExt;
         stream.read_exact(&mut response_data).await
-    }).await.ok()?.is_err() {
+    })
+    .await
+    .ok()?
+    .is_err()
+    {
         return None;
     }
 
@@ -2035,7 +2312,10 @@ async fn measure_tcp_rtt(query_bytes: &[u8], server: IpAddr) -> Result<Option<f6
     let mut framed = Vec::with_capacity(2 + query_bytes.len());
     framed.extend_from_slice(&len.to_be_bytes());
     framed.extend_from_slice(query_bytes);
-    if timeout(Duration::from_secs(2), stream.write_all(&framed)).await.is_err() {
+    if timeout(Duration::from_secs(2), stream.write_all(&framed))
+        .await
+        .is_err()
+    {
         return Ok(None);
     }
 

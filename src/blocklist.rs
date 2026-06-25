@@ -119,6 +119,8 @@ pub struct Blocklist {
     /// IPv4 address used for null-routing.
     nullroute_v4: String,
     /// IPv6 address used for null-routing.
+    #[allow(dead_code)]
+    #[allow(dead_code)]
     nullroute_v6: String,
     /// Blocked-query response type.
     block_response: BlockResponse,
@@ -450,9 +452,7 @@ impl Blocklist {
     fn block_action(&self) -> BlockAction {
         match self.block_response {
             BlockResponse::Nxdomain => BlockAction::Nxdomain,
-            BlockResponse::Nullroute => {
-                BlockAction::NullrouteV4(self.nullroute_v4.clone())
-            }
+            BlockResponse::Nullroute => BlockAction::NullrouteV4(self.nullroute_v4.clone()),
         }
     }
 
@@ -475,11 +475,7 @@ impl Blocklist {
     }
 
     /// Find a custom record for a domain or any of its parents.
-    fn find_parent_custom(
-        &self,
-        domain: &str,
-        custom: &HashMap<String, String>,
-    ) -> Option<String> {
+    fn find_parent_custom(&self, domain: &str, custom: &HashMap<String, String>) -> Option<String> {
         // Exact match already checked by caller; check parents.
         let parents = domain_parents(domain);
         for parent in parents {
@@ -523,14 +519,14 @@ fn normalise_domain(domain: &str) -> String {
     let d = domain.trim().to_lowercase();
     let d = d.trim_end_matches('.').to_string();
     // Remove leading `*` or `*.` wildcard prefixes for storage
-    let d = if d.starts_with("*.") {
-        d[2..].to_string()
+    
+    if let Some(suffix) = d.strip_prefix("*.") {
+        suffix.to_string()
     } else if d == "*" {
         String::new()
     } else {
         d
-    };
-    d
+    }
 }
 
 /// Strip inline comments from a line (everything after `#`).
@@ -587,10 +583,12 @@ fn parse_domain_line(line: &str) -> Option<String> {
     }
 
     // Some domain lists prefix with `||` (AdBlock Plus syntax)
-    let cleaned = if line.starts_with("||") && line.ends_with('^') {
-        &line[2..line.len() - 1]
-    } else if line.starts_with("||") {
-        &line[2..]
+    let cleaned = if let Some(rest) = line.strip_prefix("||") {
+        if let Some(stripped) = rest.strip_suffix('^') {
+            stripped
+        } else {
+            rest
+        }
     } else {
         line
     };
@@ -612,7 +610,9 @@ fn looks_like_ip(s: &str) -> bool {
     // Quick check for IPv6: hex digits and colons
     if s.contains(':') {
         // Basic sanity: must not contain whitespace
-        if s.chars().all(|c| c.is_ascii_hexdigit() || c == ':' || c == '.') {
+        if s.chars()
+            .all(|c| c.is_ascii_hexdigit() || c == ':' || c == '.')
+        {
             return true;
         }
     }
@@ -678,11 +678,7 @@ async fn fetch_url(url: &str) -> Result<String, anyhow::Error> {
     let response = client.get(url).send().await?;
 
     if !response.status().is_success() {
-        anyhow::bail!(
-            "HTTP {} fetching {}",
-            response.status().as_u16(),
-            url
-        );
+        anyhow::bail!("HTTP {} fetching {}", response.status().as_u16(), url);
     }
 
     let body = response.text().await?;
@@ -720,12 +716,27 @@ mod tests {
 
     #[test]
     fn test_parse_hosts_line() {
-        assert_eq!(parse_hosts_line("0.0.0.0 example.com"), Some("example.com".to_string()));
-        assert_eq!(parse_hosts_line("127.0.0.1 bad.example.com"), Some("bad.example.com".to_string()));
-        assert_eq!(parse_hosts_line("::1 bad.example.com"), Some("bad.example.com".to_string()));
-        assert_eq!(parse_hosts_line("0 bad.example.com"), Some("bad.example.com".to_string()));
+        assert_eq!(
+            parse_hosts_line("0.0.0.0 example.com"),
+            Some("example.com".to_string())
+        );
+        assert_eq!(
+            parse_hosts_line("127.0.0.1 bad.example.com"),
+            Some("bad.example.com".to_string())
+        );
+        assert_eq!(
+            parse_hosts_line("::1 bad.example.com"),
+            Some("bad.example.com".to_string())
+        );
+        assert_eq!(
+            parse_hosts_line("0 bad.example.com"),
+            Some("bad.example.com".to_string())
+        );
         // IP with trailing comment
-        assert_eq!(parse_hosts_line("0.0.0.0 example.com # comment"), Some("example.com".to_string()));
+        assert_eq!(
+            parse_hosts_line("0.0.0.0 example.com # comment"),
+            Some("example.com".to_string())
+        );
         // Invalid: no IP
         assert_eq!(parse_hosts_line("example.com"), None);
         // Invalid: no domain
@@ -736,11 +747,23 @@ mod tests {
 
     #[test]
     fn test_parse_domain_line() {
-        assert_eq!(parse_domain_line("example.com"), Some("example.com".to_string()));
-        assert_eq!(parse_domain_line("bad.example.com"), Some("bad.example.com".to_string()));
+        assert_eq!(
+            parse_domain_line("example.com"),
+            Some("example.com".to_string())
+        );
+        assert_eq!(
+            parse_domain_line("bad.example.com"),
+            Some("bad.example.com".to_string())
+        );
         // AdBlock Plus syntax
-        assert_eq!(parse_domain_line("||example.com^"), Some("example.com".to_string()));
-        assert_eq!(parse_domain_line("||example.com"), Some("example.com".to_string()));
+        assert_eq!(
+            parse_domain_line("||example.com^"),
+            Some("example.com".to_string())
+        );
+        assert_eq!(
+            parse_domain_line("||example.com"),
+            Some("example.com".to_string())
+        );
         // IP should be rejected
         assert_eq!(parse_domain_line("0.0.0.0"), None);
         assert_eq!(parse_domain_line("127.0.0.1"), None);
@@ -795,7 +818,10 @@ mod tests {
 
     #[test]
     fn test_block_response_from_str() {
-        assert_eq!(BlockResponse::from_str("nullroute"), BlockResponse::Nullroute);
+        assert_eq!(
+            BlockResponse::from_str("nullroute"),
+            BlockResponse::Nullroute
+        );
         assert_eq!(BlockResponse::from_str("nxdomain"), BlockResponse::Nxdomain);
         assert_eq!(BlockResponse::from_str("unknown"), BlockResponse::Nxdomain);
     }
@@ -902,7 +928,10 @@ malware.example.com
         assert!(action.is_some(), "Subdomain should be blocked via parent");
 
         let action = bl.is_blocked("deep.sub.example.com").await;
-        assert!(action.is_some(), "Deep subdomain should be blocked via parent");
+        assert!(
+            action.is_some(),
+            "Deep subdomain should be blocked via parent"
+        );
     }
 
     #[tokio::test]
@@ -968,7 +997,10 @@ malware.example.com
         config.block_response = "nullroute".to_string();
         config.nullroute = "0.0.0.0".to_string();
         let bl = Blocklist::new(&config);
-        assert_eq!(bl.block_action(), BlockAction::NullrouteV4("0.0.0.0".to_string()));
+        assert_eq!(
+            bl.block_action(),
+            BlockAction::NullrouteV4("0.0.0.0".to_string())
+        );
     }
 
     #[tokio::test]

@@ -1,6 +1,8 @@
+#![allow(dead_code)]
 use std::process::Command;
 
 #[cfg(target_os = "macos")]
+#[allow(dead_code)]
 pub fn install_service(plist_path: &str) -> Result<(), String> {
     // First unload if already loaded (ignore errors)
     let _ = Command::new("launchctl")
@@ -19,13 +21,27 @@ pub fn install_service(plist_path: &str) -> Result<(), String> {
 }
 
 #[cfg(target_os = "windows")]
+#[allow(dead_code)]
 pub fn install_service(_plist_path: &str) -> Result<(), String> {
     let exe_path = std::env::current_exe()
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|_| "fastdns.exe".to_string());
     let bin_path = format!("\"{}\" -b 127.0.0.1:53 -c 250000 --dnssec", exe_path);
     let status = Command::new("sc")
-        .args(["create", "FastDNS", "binPath=", &bin_path, "start=", "auto", "DisplayName=", "FastDNS Recursive Resolver", "type=", "own", "error=", "normal"])
+        .args([
+            "create",
+            "FastDNS",
+            "binPath=",
+            &bin_path,
+            "start=",
+            "auto",
+            "DisplayName=",
+            "FastDNS Recursive Resolver",
+            "type=",
+            "own",
+            "error=",
+            "normal",
+        ])
         .status()
         .map_err(|e| format!("Failed to create Windows service: {}", e))?;
     if !status.success() {
@@ -35,6 +51,7 @@ pub fn install_service(_plist_path: &str) -> Result<(), String> {
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+#[allow(dead_code)]
 pub fn install_service(_plist_path: &str) -> Result<(), String> {
     Err("Automatic service installation not supported on this platform".to_string())
 }
@@ -87,13 +104,29 @@ pub fn set_system_dns(dns_server: &str) -> Result<(), String> {
 pub fn set_system_dns(dns_server: &str) -> Result<(), String> {
     // On Windows, set DNS via netsh
     let status = Command::new("netsh")
-        .args(["interface", "ip", "set", "dns", "name=\"Local Area Connection\"", "static", dns_server])
+        .args([
+            "interface",
+            "ip",
+            "set",
+            "dns",
+            "name=\"Local Area Connection\"",
+            "static",
+            dns_server,
+        ])
         .status()
         .map_err(|e| format!("Failed to set system DNS: {}", e))?;
     if !status.success() {
         // Try with different interface name
         let _ = Command::new("netsh")
-            .args(["interface", "ip", "set", "dns", "name=\"Ethernet\"", "static", dns_server])
+            .args([
+                "interface",
+                "ip",
+                "set",
+                "dns",
+                "name=\"Ethernet\"",
+                "static",
+                dns_server,
+            ])
             .status();
     }
     Ok(())
@@ -112,5 +145,10 @@ fn get_network_services_macos() -> Result<Vec<String>, String> {
         .map_err(|e| format!("Failed to list network services: {}", e))?;
 
     let text = String::from_utf8_lossy(&output.stdout);
-    Ok(text.lines().skip(1).map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect())
+    Ok(text
+        .lines()
+        .skip(1)
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect())
 }

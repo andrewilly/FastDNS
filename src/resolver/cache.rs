@@ -75,7 +75,15 @@ impl DnsCache {
     }
 
     /// Insert a resource record into the cache.
-    pub fn insert(&mut self, name: Vec<u8>, rtype: u16, rclass: u16, ttl: u32, rdata: Vec<u8>, rdlength: u16) {
+    pub fn insert(
+        &mut self,
+        name: Vec<u8>,
+        rtype: u16,
+        rclass: u16,
+        ttl: u32,
+        rdata: Vec<u8>,
+        rdlength: u16,
+    ) {
         if ttl == 0 {
             return; // Don't cache zero-TTL records
         }
@@ -101,9 +109,7 @@ impl DnsCache {
         match self.entries.get_mut(&key) {
             Some(vec) => vec.push(entry),
             None => {
-                let mut vec = Vec::new();
-                vec.push(entry);
-                self.entries.put(key, vec);
+                self.entries.put(key, vec![entry]);
             }
         }
 
@@ -113,7 +119,12 @@ impl DnsCache {
     /// Lookup records for a given (name, type, class).
     /// Returns (records, ttl) where ttl is the minimum remaining TTL.
     /// Expired records are automatically moved to the stale store.
-    pub fn lookup(&mut self, name: &[u8], rtype: u16, rclass: u16) -> Option<(Vec<ResourceRecord>, u32)> {
+    pub fn lookup(
+        &mut self,
+        name: &[u8],
+        rtype: u16,
+        rclass: u16,
+    ) -> Option<(Vec<ResourceRecord>, u32)> {
         let key = (name.to_vec(), rtype, rclass);
         if let Some(entries) = self.entries.get_mut(&key) {
             // Separate expired entries into the stale store
@@ -128,7 +139,10 @@ impl DnsCache {
             }
             // Keep stale entries for serve-stale
             if !stale.is_empty() {
-                self.stale_entries.entry(key.clone()).or_default().extend(stale);
+                self.stale_entries
+                    .entry(key.clone())
+                    .or_default()
+                    .extend(stale);
             }
 
             if fresh.is_empty() {
@@ -179,7 +193,12 @@ impl DnsCache {
     /// Lookup stale (expired) records for serve-stale (RFC 8767).
     /// Returns records with TTL=0 to indicate they are stale.
     /// The caller should only use these if a fresh resolution fails.
-    pub fn lookup_stale(&mut self, name: &[u8], rtype: u16, rclass: u16) -> Option<Vec<ResourceRecord>> {
+    pub fn lookup_stale(
+        &mut self,
+        name: &[u8],
+        rtype: u16,
+        rclass: u16,
+    ) -> Option<Vec<ResourceRecord>> {
         let key = (name.to_vec(), rtype, rclass);
         if let Some(entries) = self.stale_entries.get(&key) {
             // Remove entries that are too old even for stale serving

@@ -7,8 +7,8 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use tokio::net::{TcpListener, TcpStream};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
 use tracing::{debug, error, info, warn};
 
 use crate::dns::error::DnsError;
@@ -16,7 +16,9 @@ use crate::dns::types::Header;
 use crate::dns::wire::{decode_message, encode_message};
 use crate::resolver::recursive::RecursiveResolver;
 
-use super::udp::{build_response, client_wants_dnssec, dnssec_opt_record, extract_zone, record_type_name};
+use super::udp::{
+    build_response, client_wants_dnssec, dnssec_opt_record, extract_zone, record_type_name,
+};
 
 /// Maximum DNS message size over TCP (RFC 1035 recommends 65535).
 const MAX_TCP_MESSAGE: usize = 65535;
@@ -27,12 +29,10 @@ pub async fn run_tcp_server(
     bind_addr: std::net::SocketAddr,
     resolver: Arc<RecursiveResolver>,
 ) -> Result<(), DnsError> {
-    let listener = TcpListener::bind(bind_addr)
-        .await
-        .map_err(|e| {
-            error!("Cannot bind TCP to {}: {}", bind_addr, e);
-            DnsError::Io(e)
-        })?;
+    let listener = TcpListener::bind(bind_addr).await.map_err(|e| {
+        error!("Cannot bind TCP to {}: {}", bind_addr, e);
+        DnsError::Io(e)
+    })?;
 
     info!("TCP server listening on {}", bind_addr);
 
@@ -132,51 +132,52 @@ pub async fn handle_tcp_connection(
                 additionals.extend(rrsigs);
                 additionals.push(dnssec_opt_record());
             }
-            let response = build_response(&request.header, question, &records, additionals, wants_dnssec && ad_flag);
+            let response = build_response(
+                &request.header,
+                question,
+                &records,
+                additionals,
+                wants_dnssec && ad_flag,
+            );
             // TCP: no truncation — full response always fits within TCP max size
             encode_message(&response)?
         }
-        Err(e) => {
-            match e {
-                DnsError::NxDomain(soa, ad) => {
-                    let mut header = Header::new_response(request.header.id, 3);
-                    header.rd = request.header.rd;
-                    header.ra = true;
-                    header.ad = ad;
-                    let mut additionals = Vec::new();
-                    if wants_dnssec {
-                        additionals.push(dnssec_opt_record());
-                    }
-                    let msg = crate::dns::types::Message {
-                        header,
-                        questions: vec![question.clone()],
-                        answers: Vec::new(),
-                        authorities: soa,
-                        additionals,
-                    };
-                    encode_message(&msg)?
+        Err(e) => match e {
+            DnsError::NxDomain(soa, ad) => {
+                let mut header = Header::new_response(request.header.id, 3);
+                header.rd = request.header.rd;
+                header.ra = true;
+                header.ad = ad;
+                let mut additionals = Vec::new();
+                if wants_dnssec {
+                    additionals.push(dnssec_opt_record());
                 }
-                _ => {
-                    let rcode = if e.to_string().contains("NXDOMAIN") {
-                        3
-                    } else {
-                        2
-                    };
-                    super::udp::quick_error_response(&query_data, rcode)
-                        .ok_or(DnsError::Malformed("Failed to build error response"))?
-                }
+                let msg = crate::dns::types::Message {
+                    header,
+                    questions: vec![question.clone()],
+                    answers: Vec::new(),
+                    authorities: soa,
+                    additionals,
+                };
+                encode_message(&msg)?
             }
-        }
+            _ => {
+                let rcode = if e.to_string().contains("NXDOMAIN") {
+                    3
+                } else {
+                    2
+                };
+                super::udp::quick_error_response(&query_data, rcode)
+                    .ok_or(DnsError::Malformed("Failed to build error response"))?
+            }
+        },
     };
 
     write_tcp_response(&mut stream, &response_bytes).await
 }
 
 /// Write a DNS response to a TCP stream with the 2-byte length prefix.
-async fn write_tcp_response(
-    stream: &mut TcpStream,
-    data: &[u8],
-) -> Result<(), DnsError> {
+async fn write_tcp_response(stream: &mut TcpStream, data: &[u8]) -> Result<(), DnsError> {
     if data.len() > MAX_TCP_MESSAGE {
         return Err(DnsError::BufferTooSmall(data.len(), MAX_TCP_MESSAGE));
     }

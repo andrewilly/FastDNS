@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use rustls::pki_types::ServerName;
 use tokio::net::TcpStream;
 use tokio::time::timeout;
-use tokio_rustls::{TlsConnector, rustls::ClientConfig};
+use tokio_rustls::{rustls::ClientConfig, TlsConnector};
 use tracing::debug;
 
 use crate::dns::error::{DnsError, DnsResult};
@@ -38,11 +38,7 @@ fn get_tls_connector() -> Arc<TlsConnector> {
         .get_or_init(|| {
             let mut root_store = rustls::RootCertStore::empty();
             // Load Mozilla's root certificates from webpki-roots
-            root_store.extend(
-                webpki_roots::TLS_SERVER_ROOTS
-                    .iter()
-                    .cloned(),
-            );
+            root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
             let config = ClientConfig::builder()
                 .with_root_certificates(root_store)
                 .with_no_client_auth();
@@ -66,11 +62,7 @@ fn wrap_dns_tcp(query: &[u8]) -> Vec<u8> {
 /// * `query_bytes` — raw DNS query message (wire format)
 /// * `server` — IP address of the DoT server
 /// * `hostname` — hostname for TLS SNI and certificate verification
-pub async fn dot_query(
-    query_bytes: &[u8],
-    server: IpAddr,
-    hostname: &str,
-) -> DnsResult<Vec<u8>> {
+pub async fn dot_query(query_bytes: &[u8], server: IpAddr, hostname: &str) -> DnsResult<Vec<u8>> {
     let start = Instant::now();
     let connector = get_tls_connector();
     let server_name = ServerName::try_from(hostname.to_string())

@@ -20,6 +20,7 @@ const DEFAULT_BIND: &str = "127.0.0.1:53";
 const DEFAULT_CACHE_SIZE: usize = 250_000;
 
 /// Default upstream DNS
+#[allow(dead_code)]
 const DEFAULT_UPSTREAM: &str = "1.1.1.1:53";
 
 /// Maximum cache size limit
@@ -160,20 +161,24 @@ impl FastDnsConfig {
             return FastDnsConfig::default();
         }
         match std::fs::read_to_string(&path_buf) {
-            Ok(content) => {
-                match toml::from_str::<FastDnsConfig>(&content) {
-                    Ok(mut cfg) => {
-                        cfg.config_path = Some(path_buf);
-                        cfg
-                    }
-                    Err(e) => {
-                        warn!("Failed to parse config file '{}': {}. Using defaults.", path, e);
-                        FastDnsConfig::default()
-                    }
+            Ok(content) => match toml::from_str::<FastDnsConfig>(&content) {
+                Ok(mut cfg) => {
+                    cfg.config_path = Some(path_buf);
+                    cfg
                 }
-            }
+                Err(e) => {
+                    warn!(
+                        "Failed to parse config file '{}': {}. Using defaults.",
+                        path, e
+                    );
+                    FastDnsConfig::default()
+                }
+            },
             Err(e) => {
-                warn!("Failed to read config file '{}': {}. Using defaults.", path, e);
+                warn!(
+                    "Failed to read config file '{}': {}. Using defaults.",
+                    path, e
+                );
                 FastDnsConfig::default()
             }
         }
@@ -182,8 +187,8 @@ impl FastDnsConfig {
     /// Merge CLI overrides into config file values.
     /// CLI values take precedence when explicitly set.
     pub fn merge_cli(&mut self, cli: &CliOverrides) {
-        if cli.bind.is_some() {
-            self.bind = cli.bind.as_ref().unwrap().clone();
+        if let Some(bind) = &cli.bind {
+            self.bind = bind.clone();
         }
         if cli.ipv6 {
             self.ipv6 = true;
@@ -240,7 +245,10 @@ impl FastDnsConfig {
             errors.push("Cache size must be > 0".into());
         }
         if self.cache_size > MAX_CACHE_SIZE {
-            errors.push(format!("Cache size {} exceeds maximum {}", self.cache_size, MAX_CACHE_SIZE));
+            errors.push(format!(
+                "Cache size {} exceeds maximum {}",
+                self.cache_size, MAX_CACHE_SIZE
+            ));
         }
 
         // Validate upstream
@@ -258,7 +266,9 @@ impl FastDnsConfig {
         // Validate blocklist mode
         match self.blocklist_mode.as_str() {
             "none" | "adblock" | "malware" | "all" => {}
-            _ => errors.push("blocklist_mode must be 'none', 'adblock', 'malware', or 'all'".into()),
+            _ => {
+                errors.push("blocklist_mode must be 'none', 'adblock', 'malware', or 'all'".into())
+            }
         }
 
         // Validate dnssec_policy
@@ -291,7 +301,11 @@ impl FastDnsConfig {
             rate_limit_qps: self.rate_limit_qps,
             rate_limit_burst: self.rate_limit_burst,
             log_file: self.log_file.clone(),
-            api_bind: if self.api_bind.is_empty() { None } else { Some(self.api_bind.clone()) },
+            api_bind: if self.api_bind.is_empty() {
+                None
+            } else {
+                Some(self.api_bind.clone())
+            },
             metrics_enabled: self.metrics,
             dnssec_policy: self.dnssec_policy.clone(),
             blocklist_mode: self.blocklist_mode.clone(),
@@ -326,60 +340,155 @@ pub struct CliOverrides {
 
 /// Domains to pre-fetch at startup (~500 top domains).
 const PREFETCH_DOMAINS: &[&str] = &[
-    "google.com", "youtube.com", "facebook.com", "amazon.com",
-    "wikipedia.org", "twitter.com", "instagram.com", "microsoft.com",
-    "apple.com", "cloudflare.com", "whatsapp.com", "reddit.com",
-    "linkedin.com", "netflix.com", "tiktok.com", "zoom.us",
-    "office.com", "live.com", "microsoftonline.com",
-    "duckduckgo.com", "bing.com", "yahoo.com", "baidu.com",
-    "pinterest.com", "tumblr.com", "discord.com", "twitch.tv",
-    "github.com", "stackoverflow.com", "gitlab.com",
-    "adobe.com", "salesforce.com", "oracle.com", "ibm.com",
-    "samsung.com", "huawei.com", "xiaomi.com", "nokia.com",
-    "paypal.com", "ebay.com", "aliexpress.com", "alibaba.com",
-    "shopify.com", "etsy.com", "walmart.com", "target.com",
-    "bestbuy.com", "homedepot.com", "costco.com", "ikea.com",
-    "imdb.com", "rottentomatoes.com", "spotify.com",
-    "soundcloud.com", "bandcamp.com", "vimeo.com", "dailymotion.com",
-    "medium.com", "wordpress.com", "blogger.com",
-    "godaddy.com", "namecheap.com",
-    "googleapis.com", "gmail.com", "googlemail.com",
-    "fonts.googleapis.com", "fonts.gstatic.com",
-    "fbcdn.net", "facebook.net", "messenger.com",
-    "amazonaws.com", "aws.amazon.com", "cloudfront.net",
-    "icloud.com", "icloud-content.com",
-    "azure.com", "azureedge.net", "azurefd.net",
-    "office365.com", "sharepoint.com",
-    "outlook.com", "hotmail.com", "msn.com",
-    "xbox.com", "xboxlive.com",
-    "skype.com", "teams.microsoft.com",
-    "nuget.org", "docs.microsoft.com",
-    "akamai.net", "akamaiedge.net", "akamaihd.net",
-    "fastly.net", "fastlylb.net",
-    "cloudflare.net", "cloudflare-dns.com",
-    "jsdelivr.net", "cdnjs.cloudflare.com",
-    "twimg.com", "t.co",
-    "snapchat.com", "sc-cdn.net",
-    "telegram.org", "t.me",
-    "discordapp.net", "discord.com",
-    "digitalocean.com", "linode.com", "vultr.com",
-    "heroku.com", "herokuapp.com",
-    "netlify.com", "vercel.com",
-    "mongodb.com", "supabase.com",
-    "docker.com", "docker.io",
+    "google.com",
+    "youtube.com",
+    "facebook.com",
+    "amazon.com",
+    "wikipedia.org",
+    "twitter.com",
+    "instagram.com",
+    "microsoft.com",
+    "apple.com",
+    "cloudflare.com",
+    "whatsapp.com",
+    "reddit.com",
+    "linkedin.com",
+    "netflix.com",
+    "tiktok.com",
+    "zoom.us",
+    "office.com",
+    "live.com",
+    "microsoftonline.com",
+    "duckduckgo.com",
+    "bing.com",
+    "yahoo.com",
+    "baidu.com",
+    "pinterest.com",
+    "tumblr.com",
+    "discord.com",
+    "twitch.tv",
+    "github.com",
+    "stackoverflow.com",
+    "gitlab.com",
+    "adobe.com",
+    "salesforce.com",
+    "oracle.com",
+    "ibm.com",
+    "samsung.com",
+    "huawei.com",
+    "xiaomi.com",
+    "nokia.com",
+    "paypal.com",
+    "ebay.com",
+    "aliexpress.com",
+    "alibaba.com",
+    "shopify.com",
+    "etsy.com",
+    "walmart.com",
+    "target.com",
+    "bestbuy.com",
+    "homedepot.com",
+    "costco.com",
+    "ikea.com",
+    "imdb.com",
+    "rottentomatoes.com",
+    "spotify.com",
+    "soundcloud.com",
+    "bandcamp.com",
+    "vimeo.com",
+    "dailymotion.com",
+    "medium.com",
+    "wordpress.com",
+    "blogger.com",
+    "godaddy.com",
+    "namecheap.com",
+    "googleapis.com",
+    "gmail.com",
+    "googlemail.com",
+    "fonts.googleapis.com",
+    "fonts.gstatic.com",
+    "fbcdn.net",
+    "facebook.net",
+    "messenger.com",
+    "amazonaws.com",
+    "aws.amazon.com",
+    "cloudfront.net",
+    "icloud.com",
+    "icloud-content.com",
+    "azure.com",
+    "azureedge.net",
+    "azurefd.net",
+    "office365.com",
+    "sharepoint.com",
+    "outlook.com",
+    "hotmail.com",
+    "msn.com",
+    "xbox.com",
+    "xboxlive.com",
+    "skype.com",
+    "teams.microsoft.com",
+    "nuget.org",
+    "docs.microsoft.com",
+    "akamai.net",
+    "akamaiedge.net",
+    "akamaihd.net",
+    "fastly.net",
+    "fastlylb.net",
+    "cloudflare.net",
+    "cloudflare-dns.com",
+    "jsdelivr.net",
+    "cdnjs.cloudflare.com",
+    "twimg.com",
+    "t.co",
+    "snapchat.com",
+    "sc-cdn.net",
+    "telegram.org",
+    "t.me",
+    "discordapp.net",
+    "discord.com",
+    "digitalocean.com",
+    "linode.com",
+    "vultr.com",
+    "heroku.com",
+    "herokuapp.com",
+    "netlify.com",
+    "vercel.com",
+    "mongodb.com",
+    "supabase.com",
+    "docker.com",
+    "docker.io",
     "kubernetes.io",
-    "npmjs.com", "pypi.org", "crates.io",
-    "cnn.com", "bbc.com", "bbc.co.uk",
-    "nytimes.com", "wsj.com", "washingtonpost.com",
-    "reuters.com", "bloomberg.com",
-    "chase.com", "bankofamerica.com", "wellsfargo.com",
-    "americanexpress.com", "discover.com",
-    "netflix.com", "netflix.net", "nflxvideo.net",
-    "hulu.com", "disneyplus.com",
+    "npmjs.com",
+    "pypi.org",
+    "crates.io",
+    "cnn.com",
+    "bbc.com",
+    "bbc.co.uk",
+    "nytimes.com",
+    "wsj.com",
+    "washingtonpost.com",
+    "reuters.com",
+    "bloomberg.com",
+    "chase.com",
+    "bankofamerica.com",
+    "wellsfargo.com",
+    "americanexpress.com",
+    "discover.com",
+    "netflix.com",
+    "netflix.net",
+    "nflxvideo.net",
+    "hulu.com",
+    "disneyplus.com",
     "primevideo.com",
-    "roblox.com", "epicgames.com",
-    "steampowered.com", "steamcdn-a.akamaihd.net",
-    "battle.net", "blizzard.com",
-    "nintendo.com", "playstation.com",
-    "iana.org", "icann.org", "ietf.org",
+    "roblox.com",
+    "epicgames.com",
+    "steampowered.com",
+    "steamcdn-a.akamaihd.net",
+    "battle.net",
+    "blizzard.com",
+    "nintendo.com",
+    "playstation.com",
+    "iana.org",
+    "icann.org",
+    "ietf.org",
 ];

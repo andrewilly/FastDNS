@@ -19,16 +19,16 @@ use super::error::{DnsError, DnsResult};
 #[derive(Debug, Clone, Copy)]
 pub struct Header {
     pub id: u16,
-    pub qr: bool,       // true = response
-    pub opcode: u8,     // 4 bits
-    pub aa: bool,       // authoritative answer
-    pub tc: bool,       // truncated
-    pub rd: bool,       // recursion desired
-    pub ra: bool,       // recursion available
-    pub z: u8,          // reserved (2 bits: bit 7 and bit 6)
-    pub ad: bool,       // authenticated data (bit 5)
-    pub cd: bool,       // checking disabled (bit 4)
-    pub rcode: u8,      // 4 bits (bits 3-0)
+    pub qr: bool,   // true = response
+    pub opcode: u8, // 4 bits
+    pub aa: bool,   // authoritative answer
+    pub tc: bool,   // truncated
+    pub rd: bool,   // recursion desired
+    pub ra: bool,   // recursion available
+    pub z: u8,      // reserved (2 bits: bit 7 and bit 6)
+    pub ad: bool,   // authenticated data (bit 5)
+    pub cd: bool,   // checking disabled (bit 4)
+    pub rcode: u8,  // 4 bits (bits 3-0)
     pub qdcount: u16,
     pub ancount: u16,
     pub nscount: u16,
@@ -92,9 +92,9 @@ impl Header {
             tc: (flags >> 9) & 1 == 1,
             rd: (flags >> 8) & 1 == 1,
             ra: (flags >> 7) & 1 == 1,
-            z: ((flags >> 6) & 0x03) as u8,  // bits 7-6: reserved (Z)
-            ad: (flags >> 5) & 1 == 1,       // bit 5: authenticated data
-            cd: (flags >> 4) & 1 == 1,       // bit 4: checking disabled
+            z: ((flags >> 6) & 0x03) as u8, // bits 7-6: reserved (Z)
+            ad: (flags >> 5) & 1 == 1,      // bit 5: authenticated data
+            cd: (flags >> 4) & 1 == 1,      // bit 4: checking disabled
             rcode: (flags & 0x0f) as u8,
             qdcount: u16::from_be_bytes([data[4], data[5]]),
             ancount: u16::from_be_bytes([data[6], data[7]]),
@@ -136,7 +136,7 @@ impl Header {
 /// DNS question section (RFC 1035 §4.1.2)
 #[derive(Debug, Clone)]
 pub struct Question {
-    pub qname: Vec<u8>,      // raw encoded domain name (with labels)
+    pub qname: Vec<u8>, // raw encoded domain name (with labels)
     pub qtype: u16,
     pub qclass: u16,
 }
@@ -197,7 +197,7 @@ impl Question {
 /// A parsed DNS resource record (RFC 1035 §4.1.3)
 #[derive(Debug, Clone)]
 pub struct ResourceRecord {
-    pub name: Vec<u8>,    // raw encoded domain name
+    pub name: Vec<u8>, // raw encoded domain name
     pub rtype: u16,
     pub rclass: u16,
     pub ttl: u32,
@@ -350,19 +350,41 @@ impl ResourceRecord {
             Some(RData::CNAME(target)) | Some(RData::NS(target)) | Some(RData::PTR(target)) => {
                 labels_to_string(target)
             }
-            Some(RData::MX { preference, exchange }) => {
+            Some(RData::MX {
+                preference,
+                exchange,
+            }) => {
                 format!("{} {}", labels_to_string(exchange), preference)
             }
             Some(RData::SOA { .. }) => "(SOA)".to_string(),
             Some(RData::TXT(parts)) => parts.join(""),
-            Some(RData::SRV { priority, weight, port, target }) => {
-                format!("{} {} {} {}", priority, weight, port, labels_to_string(target))
+            Some(RData::SRV {
+                priority,
+                weight,
+                port,
+                target,
+            }) => {
+                format!(
+                    "{} {} {} {}",
+                    priority,
+                    weight,
+                    port,
+                    labels_to_string(target)
+                )
             }
             Some(RData::RRSIG { .. }) => "(RRSIG)".to_string(),
             Some(RData::DNSKEY { .. }) => "(DNSKEY)".to_string(),
             Some(RData::NSEC { .. }) => "(NSEC)".to_string(),
-            Some(RData::DS { key_tag, algorithm, digest_type, .. }) => {
-                format!("DS key_tag={} alg={} digest_type={}", key_tag, algorithm, digest_type)
+            Some(RData::DS {
+                key_tag,
+                algorithm,
+                digest_type,
+                ..
+            }) => {
+                format!(
+                    "DS key_tag={} alg={} digest_type={}",
+                    key_tag, algorithm, digest_type
+                )
             }
             _ => {
                 if self.rdata.len() <= 20 {
@@ -371,7 +393,7 @@ impl ResourceRecord {
                     format!("<{} bytes>", self.rdata.len())
                 }
             }
-    }
+        }
     }
 }
 
@@ -460,10 +482,7 @@ impl Message {
 
     /// Find all records in the answer section matching a given type.
     pub fn answer_records(&self, rtype: u16) -> Vec<&ResourceRecord> {
-        self.answers
-            .iter()
-            .filter(|r| r.rtype == rtype)
-            .collect()
+        self.answers.iter().filter(|r| r.rtype == rtype).collect()
     }
 
     /// Find all records in the authority section matching a given type.
@@ -500,8 +519,16 @@ pub struct OptRecord {
 #[derive(Debug, Clone)]
 pub enum EdnsOption {
     Nsid,
-    ClientSubnet { family: u16, source_mask: u8, scope_mask: u8, address: Vec<u8> },
-    Cookie { client: Vec<u8>, server: Vec<u8> },
+    ClientSubnet {
+        family: u16,
+        source_mask: u8,
+        scope_mask: u8,
+        address: Vec<u8>,
+    },
+    Cookie {
+        client: Vec<u8>,
+        server: Vec<u8>,
+    },
     Padding(Vec<u8>),
     Other(u16, Vec<u8>),
 }
@@ -773,8 +800,8 @@ fn parse_rdata(rtype: u16, rdata: &[u8], msg: &[u8], rdata_offset: usize) -> Opt
         33 => parse_srv_rdata(rdata, msg, rdata_offset),
         46 => parse_rrsig_rdata(rdata, msg, rdata_offset),
         48 => parse_dnskey_rdata(rdata),
-         43 => parse_ds_rdata(rdata),
-         47 => parse_nsec_rdata(rdata, msg, rdata_offset),
+        43 => parse_ds_rdata(rdata),
+        47 => parse_nsec_rdata(rdata, msg, rdata_offset),
         _ => {
             if rdata.len() <= 65535 {
                 Some(RData::Unknown(rdata.to_vec()))
@@ -788,18 +815,29 @@ fn parse_rdata(rtype: u16, rdata: &[u8], msg: &[u8], rdata_offset: usize) -> Opt
 /// Reconstruct uncompressed rdata from the parsed RData enum.
 /// This ensures records are stored WITHOUT compression pointers,
 /// so they can be safely re-serialized in a new response message.
-    fn decompressed_rdata(_rtype: u16, parsed: &RData) -> Vec<u8> {
+fn decompressed_rdata(_rtype: u16, parsed: &RData) -> Vec<u8> {
     match parsed {
         RData::A(ip) => ip.octets().to_vec(),
         RData::AAAA(ip) => ip.octets().to_vec(),
         RData::CNAME(name) | RData::NS(name) | RData::PTR(name) => name.clone(),
-        RData::MX { preference, exchange } => {
+        RData::MX {
+            preference,
+            exchange,
+        } => {
             let mut bytes = Vec::with_capacity(2 + exchange.len());
             bytes.extend_from_slice(&preference.to_be_bytes());
             bytes.extend_from_slice(exchange);
             bytes
         }
-        RData::SOA { mname, rname, serial, refresh, retry, expire, minimum } => {
+        RData::SOA {
+            mname,
+            rname,
+            serial,
+            refresh,
+            retry,
+            expire,
+            minimum,
+        } => {
             let mut bytes = Vec::with_capacity(mname.len() + rname.len() + 20);
             bytes.extend_from_slice(mname);
             bytes.extend_from_slice(rname);
@@ -818,7 +856,12 @@ fn parse_rdata(rtype: u16, rdata: &[u8], msg: &[u8], rdata_offset: usize) -> Opt
             }
             bytes
         }
-        RData::SRV { priority, weight, port, target } => {
+        RData::SRV {
+            priority,
+            weight,
+            port,
+            target,
+        } => {
             let mut bytes = Vec::with_capacity(6 + target.len());
             bytes.extend_from_slice(&priority.to_be_bytes());
             bytes.extend_from_slice(&weight.to_be_bytes());
@@ -826,7 +869,17 @@ fn parse_rdata(rtype: u16, rdata: &[u8], msg: &[u8], rdata_offset: usize) -> Opt
             bytes.extend_from_slice(target);
             bytes
         }
-        RData::RRSIG { type_covered, algorithm, labels, original_ttl, signature_expiration, signature_inception, key_tag, signer_name, signature } => {
+        RData::RRSIG {
+            type_covered,
+            algorithm,
+            labels,
+            original_ttl,
+            signature_expiration,
+            signature_inception,
+            key_tag,
+            signer_name,
+            signature,
+        } => {
             let mut bytes = Vec::with_capacity(18 + signer_name.len() + signature.len());
             bytes.extend_from_slice(&type_covered.to_be_bytes());
             bytes.push(*algorithm);
@@ -839,7 +892,12 @@ fn parse_rdata(rtype: u16, rdata: &[u8], msg: &[u8], rdata_offset: usize) -> Opt
             bytes.extend_from_slice(signature);
             bytes
         }
-        RData::DNSKEY { flags, protocol, algorithm, public_key } => {
+        RData::DNSKEY {
+            flags,
+            protocol,
+            algorithm,
+            public_key,
+        } => {
             let mut bytes = Vec::with_capacity(4 + public_key.len());
             bytes.extend_from_slice(&flags.to_be_bytes());
             bytes.push(*protocol);
@@ -847,13 +905,21 @@ fn parse_rdata(rtype: u16, rdata: &[u8], msg: &[u8], rdata_offset: usize) -> Opt
             bytes.extend_from_slice(public_key);
             bytes
         }
-        RData::NSEC { next_domain, type_bit_maps } => {
+        RData::NSEC {
+            next_domain,
+            type_bit_maps,
+        } => {
             let mut bytes = Vec::with_capacity(next_domain.len() + type_bit_maps.len());
             bytes.extend_from_slice(next_domain);
             bytes.extend_from_slice(type_bit_maps);
             bytes
         }
-        RData::DS { key_tag, algorithm, digest_type, digest } => {
+        RData::DS {
+            key_tag,
+            algorithm,
+            digest_type,
+            digest,
+        } => {
             let mut bytes = Vec::with_capacity(4 + digest.len());
             bytes.extend_from_slice(&key_tag.to_be_bytes());
             bytes.push(*algorithm);
@@ -861,8 +927,16 @@ fn parse_rdata(rtype: u16, rdata: &[u8], msg: &[u8], rdata_offset: usize) -> Opt
             bytes.extend_from_slice(digest);
             bytes
         }
-        RData::NSEC3 { hash_algorithm, flags, iterations, salt, next_hashed_owner, type_bit_maps } => {
-            let mut bytes = Vec::with_capacity(6 + salt.len() + next_hashed_owner.len() + type_bit_maps.len());
+        RData::NSEC3 {
+            hash_algorithm,
+            flags,
+            iterations,
+            salt,
+            next_hashed_owner,
+            type_bit_maps,
+        } => {
+            let mut bytes =
+                Vec::with_capacity(6 + salt.len() + next_hashed_owner.len() + type_bit_maps.len());
             bytes.push(*hash_algorithm);
             bytes.push(*flags);
             bytes.extend_from_slice(&iterations.to_be_bytes());
@@ -879,7 +953,9 @@ fn parse_rdata(rtype: u16, rdata: &[u8], msg: &[u8], rdata_offset: usize) -> Opt
 
 fn parse_a_rdata(rdata: &[u8]) -> Option<RData> {
     if rdata.len() == 4 {
-        Some(RData::A(Ipv4Addr::new(rdata[0], rdata[1], rdata[2], rdata[3])))
+        Some(RData::A(Ipv4Addr::new(
+            rdata[0], rdata[1], rdata[2], rdata[3],
+        )))
     } else {
         None
     }
@@ -928,7 +1004,10 @@ fn parse_mx_rdata(rdata: &[u8], msg: &[u8], rdata_offset: usize) -> Option<RData
     // The exchange name starts at rdata_offset + 2 in the full message
     let exchange_offset = rdata_offset + 2;
     match decode_domain_name_at(msg, exchange_offset) {
-        Ok((exchange, _)) => Some(RData::MX { preference, exchange }),
+        Ok((exchange, _)) => Some(RData::MX {
+            preference,
+            exchange,
+        }),
         Err(_) => None,
     }
 }
@@ -946,27 +1025,43 @@ fn parse_soa_rdata(rdata: &[u8], msg: &[u8], rdata_offset: usize) -> Option<RDat
                         return None;
                     }
                     let serial = u32::from_be_bytes([
-                        rdata[data_start], rdata[data_start + 1],
-                        rdata[data_start + 2], rdata[data_start + 3],
+                        rdata[data_start],
+                        rdata[data_start + 1],
+                        rdata[data_start + 2],
+                        rdata[data_start + 3],
                     ]);
                     let refresh = u32::from_be_bytes([
-                        rdata[data_start + 4], rdata[data_start + 5],
-                        rdata[data_start + 6], rdata[data_start + 7],
+                        rdata[data_start + 4],
+                        rdata[data_start + 5],
+                        rdata[data_start + 6],
+                        rdata[data_start + 7],
                     ]);
                     let retry = u32::from_be_bytes([
-                        rdata[data_start + 8], rdata[data_start + 9],
-                        rdata[data_start + 10], rdata[data_start + 11],
+                        rdata[data_start + 8],
+                        rdata[data_start + 9],
+                        rdata[data_start + 10],
+                        rdata[data_start + 11],
                     ]);
                     let expire = u32::from_be_bytes([
-                        rdata[data_start + 12], rdata[data_start + 13],
-                        rdata[data_start + 14], rdata[data_start + 15],
+                        rdata[data_start + 12],
+                        rdata[data_start + 13],
+                        rdata[data_start + 14],
+                        rdata[data_start + 15],
                     ]);
                     let minimum = u32::from_be_bytes([
-                        rdata[data_start + 16], rdata[data_start + 17],
-                        rdata[data_start + 18], rdata[data_start + 19],
+                        rdata[data_start + 16],
+                        rdata[data_start + 17],
+                        rdata[data_start + 18],
+                        rdata[data_start + 19],
                     ]);
                     Some(RData::SOA {
-                        mname, rname, serial, refresh, retry, expire, minimum,
+                        mname,
+                        rname,
+                        serial,
+                        refresh,
+                        retry,
+                        expire,
+                        minimum,
                     })
                 }
                 Err(_) => None,
@@ -1002,7 +1097,12 @@ fn parse_srv_rdata(rdata: &[u8], msg: &[u8], rdata_offset: usize) -> Option<RDat
     let port = u16::from_be_bytes([rdata[4], rdata[5]]);
     let target_offset = rdata_offset + 6;
     match decode_domain_name_at(msg, target_offset) {
-        Ok((target, _)) => Some(RData::SRV { priority, weight, port, target }),
+        Ok((target, _)) => Some(RData::SRV {
+            priority,
+            weight,
+            port,
+            target,
+        }),
         Err(_) => None,
     }
 }
@@ -1027,9 +1127,15 @@ fn parse_rrsig_rdata(rdata: &[u8], msg: &[u8], rdata_offset: usize) -> Option<RD
             }
             let signature = rdata[sig_start..].to_vec();
             Some(RData::RRSIG {
-                type_covered, algorithm, labels, original_ttl,
-                signature_expiration, signature_inception, key_tag,
-                signer_name, signature,
+                type_covered,
+                algorithm,
+                labels,
+                original_ttl,
+                signature_expiration,
+                signature_inception,
+                key_tag,
+                signer_name,
+                signature,
             })
         }
         Err(_) => None,
@@ -1044,7 +1150,12 @@ fn parse_dnskey_rdata(rdata: &[u8]) -> Option<RData> {
     let protocol = rdata[2];
     let algorithm = rdata[3];
     let public_key = rdata[4..].to_vec();
-    Some(RData::DNSKEY { flags, protocol, algorithm, public_key })
+    Some(RData::DNSKEY {
+        flags,
+        protocol,
+        algorithm,
+        public_key,
+    })
 }
 
 fn parse_nsec_rdata(rdata: &[u8], msg: &[u8], rdata_offset: usize) -> Option<RData> {
@@ -1052,7 +1163,10 @@ fn parse_nsec_rdata(rdata: &[u8], msg: &[u8], rdata_offset: usize) -> Option<RDa
         Ok((next_domain, end_offset)) => {
             let bitmaps_start = end_offset - rdata_offset;
             let type_bit_maps = rdata[bitmaps_start..].to_vec();
-            Some(RData::NSEC { next_domain, type_bit_maps })
+            Some(RData::NSEC {
+                next_domain,
+                type_bit_maps,
+            })
         }
         Err(_) => None,
     }
@@ -1066,5 +1180,10 @@ fn parse_ds_rdata(rdata: &[u8]) -> Option<RData> {
     let algorithm = rdata[2];
     let digest_type = rdata[3];
     let digest = rdata[4..].to_vec();
-    Some(RData::DS { key_tag, algorithm, digest_type, digest })
+    Some(RData::DS {
+        key_tag,
+        algorithm,
+        digest_type,
+        digest,
+    })
 }

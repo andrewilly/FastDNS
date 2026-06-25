@@ -6,9 +6,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use futures::stream::{FuturesUnordered, StreamExt};
 use tokio::net::UdpSocket;
 use tokio::sync::Semaphore;
-use futures::stream::{FuturesUnordered, StreamExt};
 use tracing::{debug, error, info, warn};
 
 use crate::dns::constants::MAX_UDP_PAYLOAD;
@@ -51,14 +51,10 @@ pub async fn run_server(
     stop_signal: Arc<AtomicBool>,
     resolver: Arc<RecursiveResolver>,
 ) -> Result<(), DnsError> {
-    let socket = Arc::new(
-        UdpSocket::bind(config.bind_addr)
-            .await
-            .map_err(|e| {
-                error!("Cannot bind to {}: {}", config.bind_addr, e);
-                DnsError::Io(e)
-            })?,
-    );
+    let socket = Arc::new(UdpSocket::bind(config.bind_addr).await.map_err(|e| {
+        error!("Cannot bind to {}: {}", config.bind_addr, e);
+        DnsError::Io(e)
+    })?);
 
     info!(
         "🚀 FastDNS server listening on {} (IPv6={}, DNSSEC={})",
@@ -207,7 +203,13 @@ async fn handle_query(
                 // Always include an OPT record advertising DO=1
                 additionals.push(dnssec_opt_record());
             }
-            let response = build_response(&request.header, question, &records, additionals, wants_dnssec && ad_flag);
+            let response = build_response(
+                &request.header,
+                question,
+                &records,
+                additionals,
+                wants_dnssec && ad_flag,
+            );
             let response_bytes = encode_message(&response)?;
 
             if response_bytes.len() > MAX_UDP_PAYLOAD {
@@ -303,17 +305,18 @@ pub(crate) fn build_response(
 /// Returns true if the query includes an OPT pseudo-record (type 41) with
 /// the DO bit (bit 15 of TTL) set.
 pub(crate) fn client_wants_dnssec(request: &Message) -> bool {
-    request.additionals.iter().any(|r| {
-        r.rtype == 41 && ((r.ttl >> 15) & 1) == 1
-    })
+    request
+        .additionals
+        .iter()
+        .any(|r| r.rtype == 41 && ((r.ttl >> 15) & 1) == 1)
 }
 
 /// Build an EDNS0 OPT pseudo-record signaling support for DNSSEC.
 pub(crate) fn dnssec_opt_record() -> ResourceRecord {
     ResourceRecord {
-        name: vec![0], // root "."
-        rtype: 41,     // OPT
-        rclass: 4096,  // UDP payload size
+        name: vec![0],  // root "."
+        rtype: 41,      // OPT
+        rclass: 4096,   // UDP payload size
         ttl: (1 << 15), // DO bit set, version 0, extended rcode 0
         rdlength: 0,
         rdata: Vec::new(),

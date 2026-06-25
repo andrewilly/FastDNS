@@ -132,7 +132,9 @@ async fn cache_flush_handler(State(state): State<Arc<AppState>>) -> Json<FlushRe
 }
 
 /// `GET /api/blocklist/stats` — returns blocklist statistics.
-async fn blocklist_stats_handler(State(state): State<Arc<AppState>>) -> Json<BlocklistStatsResponse> {
+async fn blocklist_stats_handler(
+    State(state): State<Arc<AppState>>,
+) -> Json<BlocklistStatsResponse> {
     let total_blocked = *state.blocked_count.read().await;
     let total_queries = *state.query_count.read().await;
 

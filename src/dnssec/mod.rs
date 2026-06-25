@@ -4,7 +4,8 @@
 #![allow(dead_code)]
 
 use crate::dns::types::{
-    encode_domain_name, labels_to_string, Header, Message, OptRecord, Question, RData, ResourceRecord,
+    encode_domain_name, labels_to_string, Header, Message, OptRecord, Question, RData,
+    ResourceRecord,
 };
 use crate::dns::wire::{decode_message, encode_message};
 use crate::resolver::cache::DnsCache;
@@ -195,7 +196,11 @@ pub async fn validate_response(
         }
         if let RrsetVerdict::Bogus = verify_rrset(name, *qtype, rrset, &matching_rrsigs, &ctx).await
         {
-            debug!("dnssec: no valid signature for {} {:?}", labels_to_string(name), qtype);
+            debug!(
+                "dnssec: no valid signature for {} {:?}",
+                labels_to_string(name),
+                qtype
+            );
             return finish(start, stats, DnssecStatus::Bogus);
         }
     }
@@ -257,7 +262,12 @@ fn matching_rrsigs_for<'a>(
         .iter()
         .copied()
         .filter(|r| {
-            if let Some(RData::RRSIG { type_covered, signer_name, .. }) = &r.parsed {
+            if let Some(RData::RRSIG {
+                type_covered,
+                signer_name,
+                ..
+            }) = &r.parsed
+            {
                 signer_name == name && *type_covered == qtype
             } else {
                 false
@@ -291,18 +301,32 @@ async fn try_verify_rrsig(
     ctx: &ValidationCtx<'_>,
 ) -> RrsigOutcome {
     let (signer_name, key_tag, algorithm) = match &rrsig.parsed {
-        Some(RData::RRSIG { signer_name, key_tag, algorithm, .. }) => (signer_name, key_tag, algorithm),
+        Some(RData::RRSIG {
+            signer_name,
+            key_tag,
+            algorithm,
+            ..
+        }) => (signer_name, key_tag, algorithm),
         _ => return RrsigOutcome::NoMatchingKey,
     };
 
-    let dnskey_response =
-        fetch_dnskeys(&labels_to_string(signer_name), ctx.cache, ctx.root_hints, ctx.srtt, ctx.stats).await;
+    let dnskey_response = fetch_dnskeys(
+        &labels_to_string(signer_name),
+        ctx.cache,
+        ctx.root_hints,
+        ctx.srtt,
+        ctx.stats,
+    )
+    .await;
     let dnskeys: Vec<&ResourceRecord> = dnskey_response
         .iter()
         .filter(|r| matches!(r.parsed, Some(RData::DNSKEY { .. })))
         .collect();
     if dnskeys.is_empty() {
-        trace!("dnssec: no DNSKEY found for signer '{}'", labels_to_string(signer_name));
+        trace!(
+            "dnssec: no DNSKEY found for signer '{}'",
+            labels_to_string(signer_name)
+        );
         return RrsigOutcome::NoMatchingKey;
     }
 
@@ -317,7 +341,16 @@ async fn try_verify_rrsig(
     );
 
     for dk in &dnskeys {
-        match try_verify_with_key(dk, rrsig, rrset, &labels_to_string(signer_name), &dnskey_response, ctx).await {
+        match try_verify_with_key(
+            dk,
+            rrsig,
+            rrset,
+            &labels_to_string(signer_name),
+            &dnskey_response,
+            ctx,
+        )
+        .await
+        {
             KeyOutcome::Verified => return RrsigOutcome::Verified,
             KeyOutcome::ChainBogus => return RrsigOutcome::ChainBogus,
             KeyOutcome::Skip => continue,
@@ -397,7 +430,8 @@ fn validate_chain<'a>(
             .iter()
             .any(|dk| trust_anchors.iter().any(|ta| same_dnskey(dk, ta)));
         if anchor_present {
-            return if verify_rrset_signed(zone_records, 48, trust_anchors) { // 48 is DNSKEY type
+            return if verify_rrset_signed(zone_records, 48, trust_anchors) {
+                // 48 is DNSKEY type
                 debug!("dnssec: root DNSKEY signed by trust anchor for '{}'", zone);
                 DnssecStatus::Secure
             } else {
@@ -441,7 +475,8 @@ fn validate_chain<'a>(
             debug!("dnssec: DS digest mismatch for zone '{}'", zone);
             return DnssecStatus::Bogus;
         }
-        if !verify_rrset_signed(zone_records, 48, &ds_authenticated_ksks) { // 48 is DNSKEY type
+        if !verify_rrset_signed(zone_records, 48, &ds_authenticated_ksks) {
+            // 48 is DNSKEY type
             debug!(
                 "dnssec: DNSKEY RRset not signed by a DS-matched KSK: '{}'",
                 zone
@@ -474,7 +509,8 @@ fn validate_chain<'a>(
 
         // The DS RRset must itself be signed by the (now-validated) parent.
         // A digest match alone lets a forged DS endorse an attacker's KSK.
-        if !verify_rrset_signed(&ds_response, 43, &parent_records) { // 43 is DS type
+        if !verify_rrset_signed(&ds_response, 43, &parent_records) {
+            // 43 is DS type
             debug!("dnssec: DS RRset for '{}' not signed by parent", zone);
             return DnssecStatus::Bogus;
         }
@@ -498,15 +534,35 @@ fn same_dnskey(a: &ResourceRecord, b: &ResourceRecord) -> bool {
 /// The chain's single signature gate: does `dk` make a time-valid RRSIG `rrsig`
 /// over `rrset`? Matches algorithm + key tag, checks validity window, then
 /// verifies the signature over the canonical RRset bytes.
-fn rrsig_verified_by(rrsig: &ResourceRecord, dk: &ResourceRecord, rrset: &[&ResourceRecord]) -> bool {
+fn rrsig_verified_by(
+    rrsig: &ResourceRecord,
+    dk: &ResourceRecord,
+    rrset: &[&ResourceRecord],
+) -> bool {
     let (algorithm, key_tag, expiration, inception, signature) = match &rrsig.parsed {
-        Some(RData::RRSIG { algorithm, key_tag, signature_expiration, signature_inception, signature, .. }) =>
-            (algorithm, key_tag, signature_expiration, signature_inception, signature),
+        Some(RData::RRSIG {
+            algorithm,
+            key_tag,
+            signature_expiration,
+            signature_inception,
+            signature,
+            ..
+        }) => (
+            algorithm,
+            key_tag,
+            signature_expiration,
+            signature_inception,
+            signature,
+        ),
         _ => return false,
     };
     let (flags, protocol, dk_algo, public_key) = match &dk.parsed {
-        Some(RData::DNSKEY { flags, protocol, algorithm, public_key }) =>
-            (flags, protocol, algorithm, public_key),
+        Some(RData::DNSKEY {
+            flags,
+            protocol,
+            algorithm,
+            public_key,
+        }) => (flags, protocol, algorithm, public_key),
         _ => return false,
     };
 
@@ -531,10 +587,7 @@ fn verify_rrset_signed(
     rrset_type: u16,
     signing_keys: &[ResourceRecord],
 ) -> bool {
-    let rrset: Vec<&ResourceRecord> = records
-        .iter()
-        .filter(|r| r.rtype == rrset_type)
-        .collect();
+    let rrset: Vec<&ResourceRecord> = records.iter().filter(|r| r.rtype == rrset_type).collect();
     if rrset.is_empty() {
         return false;
     }
@@ -646,7 +699,7 @@ async fn fetch_dnskeys(
 
     // 3. Cache whatever we got back (even if empty, to avoid repeated misses)
     if !records.is_empty() {
-        if let Ok(encoded) = encode_domain_name(zone) {
+        if let Ok(_encoded) = encode_domain_name(zone) {
             if let Ok(mut cache) = cache.write() {
                 cache.insert_records(&records);
                 if let Ok(mut s) = stats.lock() {
@@ -684,7 +737,7 @@ async fn fetch_ds(
 
     // 3. Cache whatever we got back
     if !records.is_empty() {
-        if let Ok(encoded) = encode_domain_name(child) {
+        if let Ok(_encoded) = encode_domain_name(child) {
             if let Ok(mut cache) = cache.write() {
                 cache.insert_records(&records);
                 if let Ok(mut s) = stats.lock() {
@@ -764,14 +817,20 @@ fn verify_rsa_sha256(public_key: &[u8], signed_data: &[u8], sig: &[u8]) -> bool 
         return false;
     }
 
-    let components = RsaPublicKeyComponents { n: modulus, e: exponent };
-    components.verify(&RSA_PKCS1_2048_8192_SHA256, signed_data, sig).is_ok()
+    let components = RsaPublicKeyComponents {
+        n: modulus,
+        e: exponent,
+    };
+    components
+        .verify(&RSA_PKCS1_2048_8192_SHA256, signed_data, sig)
+        .is_ok()
 }
 
 fn verify_ecdsa_p256(public_key: &[u8], signed_data: &[u8], sig: &[u8]) -> bool {
     use p256::ecdsa::{signature::Verifier, Signature, VerifyingKey};
     // DNSKEY ECDSA P-256: public_key = uncompressed point (0x04 || X || Y) 65 bytes
-    if public_key.len() != 64 { // numa uses 64 bytes, FastDNS uses 65 with 0x04 prefix
+    if public_key.len() != 64 {
+        // numa uses 64 bytes, FastDNS uses 65 with 0x04 prefix
         // Try to adapt if it's 65 bytes with 0x04 prefix
         if public_key.len() == 65 && public_key[0] == 0x04 {
             let vk = match VerifyingKey::from_sec1_bytes(public_key) {
@@ -790,7 +849,10 @@ fn verify_ecdsa_p256(public_key: &[u8], signed_data: &[u8], sig: &[u8]) -> bool 
     uncompressed.push(0x04);
     uncompressed.extend_from_slice(public_key);
 
-    let key = ring::signature::UnparsedPublicKey::new(&ring::signature::ECDSA_P256_SHA256_FIXED, &uncompressed);
+    let key = ring::signature::UnparsedPublicKey::new(
+        &ring::signature::ECDSA_P256_SHA256_FIXED,
+        &uncompressed,
+    );
     key.verify(signed_data, sig).is_ok()
 }
 
@@ -822,8 +884,8 @@ fn verify_ecdsa_p384(public_key: &[u8], signed_data: &[u8], sig: &[u8]) -> bool 
 }
 
 fn verify_ed25519(public_key: &[u8], signed_data: &[u8], sig: &[u8]) -> bool {
-    use ed25519_dalek::{Verifier, VerifyingKey};
     use ed25519_dalek::Signature as EdSignature;
+    use ed25519_dalek::{Verifier, VerifyingKey};
     let pk_bytes: &[u8; 32] = match public_key.try_into() {
         Ok(b) => b,
         Err(_) => return false,
@@ -1059,10 +1121,13 @@ fn record_rdata_canonical(record: &ResourceRecord) -> Vec<u8> {
     match &record.parsed {
         Some(RData::A(addr)) => addr.octets().to_vec(),
         Some(RData::AAAA(addr)) => addr.octets().to_vec(),
-        Some(RData::NS(host))
-        | Some(RData::CNAME(host))
-        | Some(RData::PTR(host)) => name_to_wire(&labels_to_string(host)),
-        Some(RData::MX { preference, exchange }) => {
+        Some(RData::NS(host)) | Some(RData::CNAME(host)) | Some(RData::PTR(host)) => {
+            name_to_wire(&labels_to_string(host))
+        }
+        Some(RData::MX {
+            preference,
+            exchange,
+        }) => {
             let mut rdata = Vec::with_capacity(2 + exchange.len() + 2);
             rdata.extend(&preference.to_be_bytes());
             rdata.extend(name_to_wire(&labels_to_string(exchange)));
@@ -1135,7 +1200,7 @@ fn record_rdata_canonical(record: &ResourceRecord) -> Vec<u8> {
         }
         Some(RData::Unknown(original)) => original.clone(),
         Some(RData::RRSIG { .. }) => Vec::new(), // RRSIG RDATA is handled specially
-        _ => Vec::new(), // Should not happen with proper parsing
+        _ => Vec::new(),                         // Should not happen with proper parsing
     }
 }
 
@@ -1393,8 +1458,10 @@ fn nsec3_hash_in_range(owner_hash: &[u8], next_hash: &[u8], target_hash: &[u8]) 
 /// Check if any pre-decoded NSEC3 record's range covers the target hash.
 fn nsec3_any_covers(decoded: &[(Vec<u8>, &ResourceRecord)], target: &[u8]) -> bool {
     decoded.iter().any(|(oh, r)| {
-        if let Some(RData::NSEC { next_domain, .. }) = &r.parsed { // NSEC3 is treated as NSEC for now
-            let next_hashed_owner = nsec3_owner_hash(&labels_to_string(next_domain)).unwrap_or_default();
+        if let Some(RData::NSEC { next_domain, .. }) = &r.parsed {
+            // NSEC3 is treated as NSEC for now
+            let next_hashed_owner =
+                nsec3_owner_hash(&labels_to_string(next_domain)).unwrap_or_default();
             nsec3_hash_in_range(oh, &next_hashed_owner, target)
         } else {
             false
@@ -1419,7 +1486,12 @@ fn verify_authority_rrsigs(
 
     for (name, qtype, rrset) in &denial_rrsets {
         let covering_rrsig = all_rrsigs.iter().find(|r| {
-            if let Some(RData::RRSIG { signer_name, type_covered, .. }) = &r.parsed {
+            if let Some(RData::RRSIG {
+                signer_name,
+                type_covered,
+                ..
+            }) = &r.parsed
+            {
                 signer_name == name && *type_covered == *qtype
             } else {
                 false
@@ -1498,7 +1570,8 @@ fn validate_denial(
         .collect();
 
     if !nsecs.is_empty() {
-        if !verify_authority_rrsigs(authorities, all_rrsigs, 47, cache) { // 47 is NSEC type
+        if !verify_authority_rrsigs(authorities, all_rrsigs, 47, cache) {
+            // 47 is NSEC type
             debug!("dnssec: NSEC authority RRSIGs failed verification");
             return DnssecStatus::Indeterminate;
         }
@@ -1508,7 +1581,11 @@ fn validate_denial(
             // no wildcard at *.closest_encloser
             let name_covered = nsecs.iter().any(|r| {
                 if let Some(RData::NSEC { next_domain, .. }) = &r.parsed {
-                    nsec_covers_name(&labels_to_string(&r.name), &labels_to_string(next_domain), qname)
+                    nsec_covers_name(
+                        &labels_to_string(&r.name),
+                        &labels_to_string(next_domain),
+                        qname,
+                    )
                 } else {
                     false
                 }
@@ -1519,8 +1596,11 @@ fn validate_denial(
                 // Wildcard must either be covered by a gap or matched with the type absent
                 nsecs.iter().any(|r| {
                     if let Some(RData::NSEC { next_domain, .. }) = &r.parsed {
-                        nsec_covers_name(&labels_to_string(&r.name), &labels_to_string(next_domain), &wildcard)
-                            || labels_to_string(&r.name).eq_ignore_ascii_case(&wildcard)
+                        nsec_covers_name(
+                            &labels_to_string(&r.name),
+                            &labels_to_string(next_domain),
+                            &wildcard,
+                        ) || labels_to_string(&r.name).eq_ignore_ascii_case(&wildcard)
                     } else {
                         false
                     }
@@ -1560,14 +1640,17 @@ fn validate_denial(
         .collect();
 
     if !nsec3s.is_empty() {
-        if !verify_authority_rrsigs(authorities, all_rrsigs, 50, cache) { // 50 is NSEC3 type
+        if !verify_authority_rrsigs(authorities, all_rrsigs, 50, cache) {
+            // 50 is NSEC3 type
             debug!("dnssec: NSEC3 authority RRSIGs failed verification");
             return DnssecStatus::Indeterminate;
         }
 
         // Get hash params from first NSEC3
-        if let Some(RData::NSEC { .. }) = &nsec3s.first().copied().unwrap().parsed { // NSEC3 is treated as NSEC for now
-            let qname_hash = match nsec3_hash(qname, 1, 0, &[]) { // Placeholder: SHA-1, 0 iterations, no salt
+        if let Some(RData::NSEC { .. }) = &nsec3s.first().copied().unwrap().parsed {
+            // NSEC3 is treated as NSEC for now
+            let qname_hash = match nsec3_hash(qname, 1, 0, &[]) {
+                // Placeholder: SHA-1, 0 iterations, no salt
                 Some(h) => h,
                 None => return DnssecStatus::Indeterminate,
             };
@@ -1576,11 +1659,15 @@ fn validate_denial(
             let decoded: Vec<(Vec<u8>, &ResourceRecord)> = nsec3s
                 .iter()
                 .filter_map(|r| {
-                    if let Some(RData::NSEC { .. }) = &r.parsed { // NSEC3 is treated as NSEC for now
+                    if let Some(RData::NSEC { .. }) = &r.parsed {
+                        // NSEC3 is treated as NSEC for now
                         match nsec3_owner_hash(&labels_to_string(&r.name)) {
                             Some(h) => Some((h, *r)),
                             None => {
-                                trace!("dnssec: malformed NSEC3 owner '{}' — skipping", labels_to_string(&r.name));
+                                trace!(
+                                    "dnssec: malformed NSEC3 owner '{}' — skipping",
+                                    labels_to_string(&r.name)
+                                );
                                 None
                             }
                         }
@@ -1626,7 +1713,8 @@ fn validate_denial(
 
                     // (3) Wildcard at closest encloser denied
                     let wildcard = format!("*.{}", labels[i..].join("."));
-                    let wc_hash = match nsec3_hash(&wildcard, 1, 0, &[]) { // Placeholder
+                    let wc_hash = match nsec3_hash(&wildcard, 1, 0, &[]) {
+                        // Placeholder
                         Some(h) => h,
                         None => continue,
                     };
@@ -1643,7 +1731,8 @@ fn validate_denial(
             } else {
                 // NODATA — exact hash match with type not in bitmap
                 let nodata = decoded.iter().any(|(oh, r)| {
-                    if let Some(RData::NSEC { type_bit_maps, .. }) = &r.parsed { // NSEC3 is treated as NSEC for now
+                    if let Some(RData::NSEC { type_bit_maps, .. }) = &r.parsed {
+                        // NSEC3 is treated as NSEC for now
                         oh == &qname_hash
                             && !type_bitmap_contains(type_bit_maps, qtype)
                             && !type_bitmap_contains(type_bit_maps, 5) // CNAME type
@@ -1688,14 +1777,33 @@ pub fn validate_rrset(
     records: &[ResourceRecord],
     dnskeys: &[ResourceRecord],
 ) -> ValidationResult {
-    let (_type_covered, algorithm, key_tag, _signer_name, signature,
-         signature_expiration, signature_inception) = match &rrsig.parsed {
+    let (
+        _type_covered,
+        algorithm,
+        key_tag,
+        _signer_name,
+        signature,
+        signature_expiration,
+        signature_inception,
+    ) = match &rrsig.parsed {
         Some(RData::RRSIG {
-            type_covered, algorithm, key_tag,
-            signer_name, signature,
-            signature_expiration, signature_inception, ..
-        }) => (type_covered, algorithm, key_tag, signer_name, signature,
-               signature_expiration, signature_inception),
+            type_covered,
+            algorithm,
+            key_tag,
+            signer_name,
+            signature,
+            signature_expiration,
+            signature_inception,
+            ..
+        }) => (
+            type_covered,
+            algorithm,
+            key_tag,
+            signer_name,
+            signature,
+            signature_expiration,
+            signature_inception,
+        ),
         _ => return ValidationResult::Indeterminate,
     };
 
@@ -1710,8 +1818,12 @@ pub fn validate_rrset(
     // Find matching DNSKEY
     for dk in dnskeys {
         let (flags, protocol, dk_algo, public_key) = match &dk.parsed {
-            Some(RData::DNSKEY { flags, protocol, algorithm, public_key }) =>
-                (flags, protocol, algorithm, public_key),
+            Some(RData::DNSKEY {
+                flags,
+                protocol,
+                algorithm,
+                public_key,
+            }) => (flags, protocol, algorithm, public_key),
             _ => continue,
         };
 
@@ -1778,8 +1890,14 @@ pub fn validate_negative_dnssec(
         // Verify each NSEC record has a valid RRSIG
         for nsec in nsec_records {
             let has_valid_rrsig = all_rrsigs.iter().any(|rrsig| {
-                if let Some(RData::RRSIG { type_covered, signer_name, .. }) = &rrsig.parsed {
-                    if *type_covered != 47 { // NSEC type
+                if let Some(RData::RRSIG {
+                    type_covered,
+                    signer_name,
+                    ..
+                }) = &rrsig.parsed
+                {
+                    if *type_covered != 47 {
+                        // NSEC type
                         return false;
                     }
                     // Check signer name matches NSEC owner's zone
@@ -1826,15 +1944,15 @@ pub fn validate_dnskeys_against_ds(
     }
 
     // Each DS record should match at least one DNSKEY
-    ds_records.iter().all(|ds| {
-        dnskeys.iter().any(|dk| verify_ds(ds, dk, ""))
-    })
+    ds_records
+        .iter()
+        .all(|ds| dnskeys.iter().any(|dk| verify_ds(ds, dk, "")))
 }
 
 /// Validate a set of DNSKEY records against the compiled-in root trust anchor.
 pub fn validate_dnskeys_against_root_anchor(dnskeys: &[ResourceRecord]) -> bool {
     let trust_anchors = &*TRUST_ANCHORS;
-    dnskeys.iter().any(|dk| {
-        trust_anchors.iter().any(|ta| same_dnskey(dk, ta))
-    })
+    dnskeys
+        .iter()
+        .any(|dk| trust_anchors.iter().any(|ta| same_dnskey(dk, ta)))
 }
