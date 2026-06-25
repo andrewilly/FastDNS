@@ -519,7 +519,7 @@ fn normalise_domain(domain: &str) -> String {
     let d = domain.trim().to_lowercase();
     let d = d.trim_end_matches('.').to_string();
     // Remove leading `*` or `*.` wildcard prefixes for storage
-    
+
     if let Some(suffix) = d.strip_prefix("*.") {
         suffix.to_string()
     } else if d == "*" {

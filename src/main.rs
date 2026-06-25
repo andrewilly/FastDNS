@@ -59,8 +59,8 @@ const SHUTDOWN_GRACE_PERIOD: Duration = Duration::from_secs(5);
 #[cfg(windows)]
 mod service_handler {
     use std::ffi::OsString;
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
     use std::time::Duration;
 
     use windows_service::{
