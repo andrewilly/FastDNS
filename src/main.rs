@@ -264,7 +264,7 @@ fn main() {
 
     // Install/uninstall service mode
     if cli.install_service {
-        install_service_route();
+        install_service_route(&config);
         return;
     }
     if cli.uninstall_service {
@@ -728,8 +728,126 @@ fn clean_old_installation() {
     std::thread::sleep(std::time::Duration::from_secs(1));
 }
 
-/// Install FastDNS as a system service.
-fn install_service_route() {
+/// Generate a launchd plist with ProgramArguments matching the current config.
+#[cfg(target_os = "macos")]
+fn generate_plist(config: &FastDnsConfig, plist_path: &str) -> Result<(), String> {
+    use std::io::Write;
+
+    // Build ProgramArguments array from config
+    let mut args: Vec<String> = vec![
+        "/usr/local/bin/fastdns".to_string(),
+        "-b".to_string(),
+        config.bind.clone(),
+        "-c".to_string(),
+        config.cache_size.to_string(),
+    ];
+
+    if config.dnssec {
+        args.push("--dnssec".to_string());
+    }
+    if config.ipv6 {
+        args.push("--ipv6".to_string());
+    }
+    if let Some(ref up) = config.upstream {
+        args.push("--upstream".to_string());
+        args.push(up.clone());
+        if config.doh {
+            args.push("--doh".to_string());
+        } else if config.dot {
+            args.push("--dot".to_string());
+        }
+    }
+    if config.blocklist_mode != "none" {
+        args.push("--blocklist-mode".to_string());
+        args.push(config.blocklist_mode.clone());
+    }
+    if !config.api_bind.is_empty() {
+        args.push("--api-bind".to_string());
+        args.push(config.api_bind.clone());
+    }
+    if config.metrics {
+        args.push("--metrics".to_string());
+    }
+    if !config.log_file.is_empty() {
+        args.push("--log-file".to_string());
+        args.push(config.log_file.clone());
+    }
+    if config.log_level != "info" {
+        args.push("--log-level".to_string());
+        args.push(config.log_level.clone());
+    }
+    if config.rate_limit_qps != 100 {
+        args.push("--rate-limit-qps".to_string());
+        args.push(config.rate_limit_qps.to_string());
+    }
+
+    // Build XML plist
+    let mut plist = String::from(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.fastdns.daemon</string>
+    <key>ProgramArguments</key>
+    <array>
+"#);
+
+    for arg in &args {
+        plist.push_str(&format!("        <string>{}</string>\n", escape_xml(arg)));
+    }
+
+    plist.push_str(
+        r#"    </array>
+    <key>KeepAlive</key>
+    <dict>
+        <key>Crashed</key>
+        <true/>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>UserName</key>
+    <string>root</string>
+    <key>StandardOutPath</key>
+    <string>/var/log/fastdns.log</string>
+    <key>StandardErrorPath</key>
+    <string>/var/log/fastdns.error.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>RUST_BACKTRACE</key>
+        <string>1</string>
+    </dict>
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+    <key>WatchPaths</key>
+    <array>
+        <string>/etc/resolv.conf</string>
+    </array>
+</dict>
+</plist>
+"#);
+
+    let mut file = std::fs::File::create(plist_path)
+        .map_err(|e| format!("Failed to create plist: {}", e))?;
+    file.write_all(plist.as_bytes())
+        .map_err(|e| format!("Failed to write plist: {}", e))?;
+
+    Ok(())
+}
+
+/// Escape XML special characters for plist strings.
+#[cfg(target_os = "macos")]
+fn escape_xml(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
+/// Install FastDNS as a system service, using `config` for dynamic plist generation.
+fn install_service_route(config: &FastDnsConfig) {
     #[cfg(target_os = "macos")]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -764,19 +882,19 @@ fn install_service_route() {
         }
         println!("");
 
-        // ── FASE 2: Copia plist ────────────────────────
-        let plist_src = "scripts/macos/com.fastdns.daemon.plist";
+        // ── FASE 2: Genera plist ───────────────────────
         let plist_dst = "/Library/LaunchDaemons/com.fastdns.daemon.plist";
 
-        println!("📋 Installo launchd plist...");
-        match std::fs::copy(plist_src, plist_dst) {
-            Ok(_) => {
+        println!("📋 Genero launchd plist con i parametri correnti...");
+        match generate_plist(config, plist_dst) {
+            Ok(()) => {
+                use std::os::unix::fs::PermissionsExt;
                 std::fs::set_permissions(plist_dst,
                     std::fs::Permissions::from_mode(0o644)).ok();
-                println!("   ✅ Plist installato: {}", plist_dst);
+                println!("   ✅ Plist generato: {}", plist_dst);
             }
             Err(e) => {
-                eprintln!("   ❌ Errore copia plist: {}", e);
+                eprintln!("   ❌ Errore generazione plist: {}", e);
                 return;
             }
         }
