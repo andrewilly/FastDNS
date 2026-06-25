@@ -3,7 +3,7 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'  # Trigger on tags like v0.1.0, v1.0.0, etc.
+      - 'v*'
 
 env:
   CARGO_TERM_COLOR: always
@@ -16,112 +16,43 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-unknown-linux-gnu
-
-      - name: Rust Cache
-        uses: Swatinem/rust-cache@v2
-
-      - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
-
-      - name: Build release
-        run: cargo build --release --target x86_64-unknown-linux-gnu
-
-      - name: Strip binary
-        run: strip target/x86_64-unknown-linux-gnu/release/fastdns
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
+      - run: cargo build --release --target x86_64-unknown-linux-gnu
+      - run: strip target/x86_64-unknown-linux-gnu/release/fastdns
+      - uses: actions/upload-artifact@v4
         with:
           name: fastdns-linux-x86_64
           path: target/x86_64-unknown-linux-gnu/release/fastdns
           retention-days: 7
 
-  # ── macOS x86_64 ────────────────────────────────────────────────
-  build-macos-x86_64:
-    name: Build macOS (x86_64)
-    runs-on: macos-13
+  # ── macOS Universal (Intel + ARM64 in unico job) ────────────────
+  build-macos:
+    name: Build macOS (Universal)
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-apple-darwin
-
-      - name: Rust Cache
-        uses: Swatinem/rust-cache@v2
-
-      - name: Build release
+          targets: x86_64-apple-darwin, aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - name: Build x86_64 (Intel)
         run: cargo build --release --target x86_64-apple-darwin
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: fastdns-macos-x86_64
-          path: target/x86_64-apple-darwin/release/fastdns
-          retention-days: 7
-
-  # ── macOS ARM64 ─────────────────────────────────────────────────
-  build-macos-arm64:
-    name: Build macOS (ARM64)
-    runs-on: macos-14  # Apple Silicon runner
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin
-
-      - name: Rust Cache
-        uses: Swatinem/rust-cache@v2
-
-      - name: Build release
+      - name: Build ARM64
         run: cargo build --release --target aarch64-apple-darwin
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: fastdns-macos-arm64
-          path: target/aarch64-apple-darwin/release/fastdns
-          retention-days: 7
-
-  # ── macOS Universal Binary (Fat Binary) ─────────────────────────
-  create-macos-universal:
-    name: Create macOS Universal Binary
-    needs: [build-macos-x86_64, build-macos-arm64]
-    runs-on: macos-14
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: fastdns-macos-x86_64
-          path: /tmp/fastdns-x86_64
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: fastdns-macos-arm64
-          path: /tmp/fastdns-arm64
-
-      - name: Create universal binary
+      - name: Create universal fat binary
         run: |
-          chmod +x /tmp/fastdns-x86_64/fastdns /tmp/fastdns-arm64/fastdns
-          lipo -create -output /tmp/fastdns-universal/fastdns \
-            /tmp/fastdns-x86_64/fastdns \
-            /tmp/fastdns-arm64/fastdns
           mkdir -p /tmp/fastdns-universal
           lipo -create -output /tmp/fastdns-universal/fastdns \
-            /tmp/fastdns-x86_64/fastdns \
-            /tmp/fastdns-arm64/fastdns
+            target/x86_64-apple-darwin/release/fastdns \
+            target/aarch64-apple-darwin/release/fastdns
+          echo "=== Binary info ==="
           file /tmp/fastdns-universal/fastdns
           lipo -info /tmp/fastdns-universal/fastdns
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: fastdns-macos-universal
           path: /tmp/fastdns-universal/fastdns
@@ -133,20 +64,12 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
-
-      - name: Rust Cache
-        uses: Swatinem/rust-cache@v2
-
-      - name: Build release
-        run: cargo build --release --target x86_64-pc-windows-msvc
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --target x86_64-pc-windows-msvc
+      - uses: actions/upload-artifact@v4
         with:
           name: fastdns-windows-x86_64
           path: target/x86_64-pc-windows-msvc/release/fastdns.exe
@@ -155,42 +78,26 @@ jobs:
   # ── Create GitHub Release ──────────────────────────────────────
   create-release:
     name: Create GitHub Release
-    needs: [build-linux, create-macos-universal, build-windows]
+    needs: [build-linux, build-macos, build-windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           path: /tmp/release-artifacts
-
-      - name: Create release archives
+      - name: Assemble release assets
         run: |
-          VERSION=${GITHUB_REF_NAME#v}
-          echo "Release version: $VERSION"
-
-          # Linux
           mkdir -p /tmp/upload
           cp /tmp/release-artifacts/fastdns-linux-x86_64/fastdns /tmp/upload/fastdns-linux-x86_64
           chmod +x /tmp/upload/fastdns-linux-x86_64
-
-          # macOS
           cp /tmp/release-artifacts/fastdns-macos-universal/fastdns /tmp/upload/fastdns-macos-universal
           chmod +x /tmp/upload/fastdns-macos-universal
-
-          # Windows
           cp /tmp/release-artifacts/fastdns-windows-x86_64/fastdns.exe /tmp/upload/fastdns-windows-x86_64.exe
-
-          # Verify
           ls -lh /tmp/upload/
-          echo "---"
           file /tmp/upload/*
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v2
         with:
           name: FastDNS ${{ github.ref_name }}
           tag_name: ${{ github.ref_name }}
