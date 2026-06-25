@@ -21,3 +21,6 @@ Thumbs.db
 
 # Dependencies (use Cargo.lock for reproducible builds)
 # Cargo.lock is committed for application crates
+
+# CodeWhale / DeepSeek internal state
+.deepseek/
