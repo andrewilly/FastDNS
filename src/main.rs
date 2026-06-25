@@ -784,26 +784,53 @@ fn install_service_route() {
 
         // ── FASE 3: Carica daemon ──────────────────────
         println!("📋 Carico il daemon via launchctl...");
-        let load_status = std::process::Command::new("launchctl")
-            .args(["load", "-w", plist_dst])
+
+        // Su macOS 15+ con SIP, `launchctl load -w` fallisce con EIO 5 (Input/output error).
+        // Prima di fare bootstrap, rimuoviamo eventuali servizi preesistenti con bootout:
+        let _ = std::process::Command::new("launchctl")
+            .args(["bootout", "system", plist_dst])
             .status();
-        match load_status {
-            Ok(s) if s.success() => println!("   ✅ Daemon caricato correttamente."),
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        // Il comando corretto è `launchctl bootstrap system` (richiesto da SIP):
+        let bootstrap_status = std::process::Command::new("launchctl")
+            .args(["bootstrap", "system", plist_dst])
+            .status();
+
+        let loaded = match bootstrap_status {
+            Ok(s) if s.success() => {
+                println!("   ✅ Daemon registrato via launchctl bootstrap.");
+                true
+            }
             _ => {
-                eprintln!("   ⚠️  launchctl load fallito (SIP su macOS 15+). Provo osascript...");
-                let _ = std::process::Command::new("osascript")
-                    .args(["-e", &format!(
-                        "do shell script \"launchctl load -w {}\" with administrator privileges",
-                        plist_dst)])
+                // Fallback per macOS pre-15: prova con load -w
+                eprintln!("   ⚠️  bootstrap fallito. Provo launchctl load -w...");
+                let _ = std::process::Command::new("launchctl")
+                    .args(["load", "-w", plist_dst])
                     .status();
                 std::thread::sleep(std::time::Duration::from_secs(1));
-                // Verifica se è partito
-                if is_launchd_service_loaded("com.fastdns.daemon") {
-                    println!("   ✅ Daemon caricato (via osascript fallback).");
-                } else {
-                    eprintln!("   ❌ Impossibile caricare il daemon. Verifica SIP o esegui manualmente:");
-                    eprintln!("      sudo launchctl load -w {}", plist_dst);
-                }
+                is_launchd_service_loaded("com.fastdns.daemon")
+            }
+        };
+
+        // Verifica finale
+        if loaded {
+            println!("   ✅ Daemon caricato correttamente.");
+        } else {
+            // Ultimo tentativo: osascript (richiede GUI)
+            eprintln!("   ⚠️  launchctl non disponibile. Provo osascript...");
+            let _ = std::process::Command::new("osascript")
+                .args(["-e", &format!(
+                    "do shell script \"launchctl bootstrap system {}\" with administrator privileges",
+                    plist_dst)])
+                .status();
+            std::thread::sleep(std::time::Duration::from_secs(2));
+
+            if is_launchd_service_loaded("com.fastdns.daemon") {
+                println!("   ✅ Daemon caricato (via osascript).");
+            } else {
+                eprintln!("   ❌ Impossibile caricare il daemon. Prova manualmente:");
+                eprintln!("      sudo launchctl bootstrap system {}", plist_dst);
+                eprintln!("   Il servizio potrebbe funzionare solo dopo un reboot con SIP ridotta.");
             }
         }
         println!("");
