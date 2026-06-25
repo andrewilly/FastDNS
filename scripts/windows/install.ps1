@@ -145,36 +145,21 @@ $BinPath = "`"$BinaryPath`" -b 127.0.0.1:53 -c 250000 --dnssec --upstream 8.8.8.
 Write-Log "Service name: $ServiceName" -Color White
 Write-Log "Binary:       $BinPath" -Color White
 
-# sc.exe syntax: binPath= <command> (space after = is required)
-$ArgumentList = @(
-    "create",
-    $ServiceName,
-    "binPath=",
-    $BinPath,
-    "start=",
-    "auto",
-    "DisplayName=",
-    $DisplayName,
-    "type=",
-    "own",
-    "error=",
-    "normal"
-)
-
-$Result = Start-Process -Wait -NoNewWindow -FilePath "sc.exe" -ArgumentList $ArgumentList -PassThru
-if ($Result.ExitCode -ne 0) {
-    Write-Log "ERROR: Service creation failed (exit code: $($Result.ExitCode))" -Color Red
-    Write-Log "Run this script as Administrator" -Color Yellow
+# sc.exe create syntax: binPath= "full command line" start= auto
+# Must call via cmd.exe to preserve sc.exe's argument parser
+$CreateCmd = "sc.exe create $ServiceName binPath= `"$BinPath`" start= auto DisplayName= `"$DisplayName`" type= own error= normal"
+cmd /c "$CreateCmd"
+if ($LASTEXITCODE -ne 0) {
+    Write-Log "ERROR: Service creation failed (exit code: $LASTEXITCODE)" -Color Red
+    Write-Log "Manual: $CreateCmd" -Color Yellow
     pause
     exit 1
 }
 Write-Log "OK: Service created" -Color Green
 
 # Configure auto-restart on failure
-$FailureArgs = @("failure", $ServiceName, "reset=", "86400", "actions=", "restart/5000/restart/10000/restart/30000")
-Start-Process -Wait -NoNewWindow -FilePath "sc.exe" -ArgumentList $FailureArgs -PassThru | Out-Null
-$FailureFlagArgs = @("failureflag", $ServiceName, "1")
-Start-Process -Wait -NoNewWindow -FilePath "sc.exe" -ArgumentList $FailureFlagArgs -PassThru | Out-Null
+cmd /c "sc.exe failure $ServiceName reset= 86400 actions= restart/5000/restart/10000/restart/30000" 2>$null
+cmd /c "sc.exe failureflag $ServiceName 1" 2>$null
 Write-Log "OK: Auto-restart configured" -Color Green
 Write-Log ""
 
