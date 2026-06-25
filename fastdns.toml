@@ -9,7 +9,7 @@ bind = "127.0.0.1:53"
 ipv6 = false
 
 # Enable DNSSEC OK bit (requests authenticated data)
-dnssec = false
+dnssec = true
 
 # DNSSEC enforcement: "ad" (set AD bit), "enforce" (reject bogus), "off"
 dnssec_policy = "ad"
@@ -24,10 +24,10 @@ no_prefetch = false
 # When set, FastDNS forwards queries to this upstream resolver
 # instead of performing full recursive resolution.
 # Useful for hybrid deployments or initial cache warming.
-# upstream = "1.1.1.1:53"
+upstream = "1.1.1.1:53"
 
 # Use DNS-over-HTTPS for forwarding
-# doh = true
+doh = true
 
 # Use DNS-over-TLS for forwarding
 # dot = false
