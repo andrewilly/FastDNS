@@ -1,7 +1,6 @@
 //! DNS response cache with TTL management and serve-stale (RFC 8767) support.
 #![allow(dead_code)]
 
-use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::time::{Duration, Instant};
 
@@ -16,6 +15,9 @@ const MAX_CACHE_ENTRIES: usize = 100_000;
 /// How long stale entries are kept before being purged (RFC 8767 recommends
 /// at least 24 hours for stale answers, but we use 6 hours to balance memory).
 const STALE_MAX_AGE: Duration = Duration::from_secs(6 * 3600);
+
+/// Maximum number of stale entries to keep (same as main cache, avoids unbounded growth).
+const STALE_MAX_ENTRIES: usize = 50_000;
 
 /// A cached entry with expiry tracking
 #[derive(Debug, Clone)]
@@ -44,8 +46,9 @@ pub struct DnsCache {
     /// Key: (encoded_name, rtype, rclass) -> Vec of cached records
     /// LRU eviction is handled by the LruCache internals.
     entries: LruCache<(Vec<u8>, u16, u16), Vec<CacheEntry>>,
-    /// Stale (expired) entries kept for serve-stale
-    stale_entries: HashMap<(Vec<u8>, u16, u16), Vec<CacheEntry>>,
+    /// Stale (expired) entries kept for serve-stale.
+    /// Capacity-limited to prevent unbounded memory growth.
+    stale_entries: LruCache<(Vec<u8>, u16, u16), Vec<CacheEntry>>,
     max_entries: usize,
     hits: u64,
     misses: u64,
@@ -54,9 +57,10 @@ pub struct DnsCache {
 impl DnsCache {
     pub fn new() -> Self {
         let cap = NonZeroUsize::new(MAX_CACHE_ENTRIES).expect("MAX_CACHE_ENTRIES > 0");
+        let stale_cap = NonZeroUsize::new(STALE_MAX_ENTRIES).expect("STALE_MAX_ENTRIES > 0");
         DnsCache {
             entries: LruCache::new(cap),
-            stale_entries: HashMap::new(),
+            stale_entries: LruCache::new(stale_cap),
             max_entries: MAX_CACHE_ENTRIES,
             hits: 0,
             misses: 0,
@@ -65,9 +69,12 @@ impl DnsCache {
 
     pub fn with_max_entries(max: usize) -> Self {
         let cap = NonZeroUsize::new(max.max(1)).expect("cache size > 0");
+        let stale_cap = NonZeroUsize::new(
+            (max / 5).max(1000).min(STALE_MAX_ENTRIES)
+        ).expect("stale cache size > 0");
         DnsCache {
             entries: LruCache::new(cap),
-            stale_entries: HashMap::new(),
+            stale_entries: LruCache::new(stale_cap),
             max_entries: max,
             hits: 0,
             misses: 0,
@@ -75,15 +82,7 @@ impl DnsCache {
     }
 
     /// Insert a resource record into the cache.
-    pub fn insert(
-        &mut self,
-        name: Vec<u8>,
-        rtype: u16,
-        rclass: u16,
-        ttl: u32,
-        rdata: Vec<u8>,
-        rdlength: u16,
-    ) {
+    pub fn insert(&mut self, name: Vec<u8>, rtype: u16, rclass: u16, ttl: u32, rdata: Vec<u8>, rdlength: u16) {
         if ttl == 0 {
             return; // Don't cache zero-TTL records
         }
@@ -119,12 +118,7 @@ impl DnsCache {
     /// Lookup records for a given (name, type, class).
     /// Returns (records, ttl) where ttl is the minimum remaining TTL.
     /// Expired records are automatically moved to the stale store.
-    pub fn lookup(
-        &mut self,
-        name: &[u8],
-        rtype: u16,
-        rclass: u16,
-    ) -> Option<(Vec<ResourceRecord>, u32)> {
+    pub fn lookup(&mut self, name: &[u8], rtype: u16, rclass: u16) -> Option<(Vec<ResourceRecord>, u32)> {
         let key = (name.to_vec(), rtype, rclass);
         if let Some(entries) = self.entries.get_mut(&key) {
             // Separate expired entries into the stale store
@@ -137,12 +131,9 @@ impl DnsCache {
                     fresh.push(e);
                 }
             }
-            // Keep stale entries for serve-stale
+            // Keep stale entries for serve-stale (bounded by LruCache capacity)
             if !stale.is_empty() {
-                self.stale_entries
-                    .entry(key.clone())
-                    .or_default()
-                    .extend(stale);
+                self.stale_entries.put(key.clone(), stale);
             }
 
             if fresh.is_empty() {
@@ -193,12 +184,7 @@ impl DnsCache {
     /// Lookup stale (expired) records for serve-stale (RFC 8767).
     /// Returns records with TTL=0 to indicate they are stale.
     /// The caller should only use these if a fresh resolution fails.
-    pub fn lookup_stale(
-        &mut self,
-        name: &[u8],
-        rtype: u16,
-        rclass: u16,
-    ) -> Option<Vec<ResourceRecord>> {
+    pub fn lookup_stale(&mut self, name: &[u8], rtype: u16, rclass: u16) -> Option<Vec<ResourceRecord>> {
         let key = (name.to_vec(), rtype, rclass);
         if let Some(entries) = self.stale_entries.get(&key) {
             // Remove entries that are too old even for stale serving
@@ -209,7 +195,7 @@ impl DnsCache {
                 .collect();
 
             if usable.is_empty() {
-                self.stale_entries.remove(&key);
+                self.stale_entries.pop_entry(&key);
                 return None;
             }
 
@@ -249,12 +235,18 @@ impl DnsCache {
     }
 
     /// Purge expired entries from the stale store.
+    /// Now called on every insert to keep memory bounded.
     pub fn purge_expired(&mut self) {
         let now = Instant::now();
-        self.stale_entries.retain(|_, entries| {
-            entries.retain(|e| now.duration_since(e.expires_at) < STALE_MAX_AGE);
-            !entries.is_empty()
-        });
+        let too_old: Vec<(Vec<u8>, u16, u16)> = self.stale_entries
+            .iter()
+            .filter(|(_, entries)| entries.iter().all(|e| now.duration_since(e.expires_at) >= STALE_MAX_AGE))
+            .map(|(k, _)| k.clone())
+            .collect();
+
+        for key in too_old {
+            self.stale_entries.pop_entry(&key);
+        }
     }
 
     /// Clear all entries from the cache (including stale entries).
@@ -270,7 +262,11 @@ impl DnsCache {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.entries.is_empty() && self.stale_entries.is_empty()
+    }
+
+    pub fn stale_len(&self) -> usize {
+        self.stale_entries.len()
     }
 
     pub fn hit_rate(&self) -> f64 {

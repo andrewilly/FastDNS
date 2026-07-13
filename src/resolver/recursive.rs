@@ -333,9 +333,11 @@ impl RecursiveResolver {
         let tcp_pool = Arc::new(Mutex::new(TcpPool::new()));
         let truncation_cache: Arc<Mutex<HashMap<IpAddr, Instant>>> =
             Arc::new(Mutex::new(HashMap::new()));
+        let cache = Arc::new(Mutex::new(DnsCache::with_max_entries(cache_size)));
 
         // Spawn background tasks using cloned arcs
         Self::spawn_background_tasks(
+            cache.clone(),
             server_rtt.clone(),
             server_health.clone(),
             tcp_pool.clone(),
@@ -343,7 +345,7 @@ impl RecursiveResolver {
         );
 
         Ok(RecursiveResolver {
-            cache: Arc::new(Mutex::new(DnsCache::with_max_entries(cache_size))),
+            cache,
             ns_cache: Arc::new(Mutex::new(LruCache::new(
                 std::num::NonZeroUsize::new(NS_CACHE_MAX).expect("LRU capacity > 0"),
             ))),
@@ -361,8 +363,9 @@ impl RecursiveResolver {
         })
     }
 
-    /// Spawn background tasks: periodic RTT save, TCP pool cleanup, health checks.
+    /// Spawn background tasks: periodic RTT save, TCP pool cleanup, health checks, cache purge.
     fn spawn_background_tasks(
+        cache: Arc<Mutex<DnsCache>>,
         server_rtt: Arc<Mutex<LruCache<IpAddr, (f64, Instant)>>>,
         server_health: Arc<Mutex<HashMap<IpAddr, ServerHealth>>>,
         tcp_pool: Arc<Mutex<TcpPool>>,
@@ -402,6 +405,22 @@ impl RecursiveResolver {
                 let now = Instant::now();
                 let mut tc = trunc_cleaner.lock().await;
                 tc.retain(|_, expiry| *expiry > now);
+            }
+        });
+
+        // Periodic stale cache cleanup (every 5 minutes)
+        // Prevents serve-stale store from accumulating entries older than STALE_MAX_AGE.
+        let cache_cleaner = cache.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(300)).await;
+                let mut c = cache_cleaner.lock().await;
+                let before = c.stale_len();
+                c.purge_expired();
+                let after = c.stale_len();
+                if before != after {
+                    debug!("Purged {} stale cache entries", before - after);
+                }
             }
         });
 
