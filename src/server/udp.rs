@@ -18,6 +18,11 @@ use crate::dns::types::{Header, Message, Question, ResourceRecord};
 use crate::dns::wire::{decode_message, encode_message};
 use crate::resolver::recursive::RecursiveResolver;
 
+/// Maximum concurrent query tasks in the UDP server.
+/// Bounds memory: each task holds a heap Vec + Arcs; without this cap,
+/// sustained load accumulates tasks without limit.
+const MAX_CONCURRENT_QUERIES: usize = 1024;
+
 /// Server configuration.
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
@@ -100,13 +105,15 @@ pub async fn run_server(
     }
 
     let mut buf = vec![0u8; 8192];
+    let query_permits = Arc::new(Semaphore::new(MAX_CONCURRENT_QUERIES));
 
     loop {
         let recv_fut = socket.recv_from(&mut buf);
+        let permits = query_permits.clone();
 
         tokio::select! {
             result = recv_fut => {
-                handle_recv(result, &resolver, &socket, &buf);
+                handle_recv(result, &resolver, &socket, &buf, permits);
             }
             _ = async {
                 while !stop_signal.load(Ordering::SeqCst) {
@@ -122,28 +129,45 @@ pub async fn run_server(
 }
 
 /// Handle a single recv_from result: spawn a task to process the query.
+/// Bounded by a semaphore to prevent unbounded task accumulation under load.
 fn handle_recv(
     result: Result<(usize, SocketAddr), std::io::Error>,
     resolver: &Arc<RecursiveResolver>,
     socket: &Arc<UdpSocket>,
     buf: &[u8],
+    permits: Arc<Semaphore>,
 ) {
     match result {
         Ok((len, src)) => {
             let data = buf[..len].to_vec();
             let resolver = resolver.clone();
             let socket = socket.clone();
-            tokio::spawn(async move {
-                let start = Instant::now();
-                if let Err(e) = handle_query(resolver, socket, data, src).await {
-                    if !matches!(e, DnsError::Io(_)) {
-                        warn!("Error handling query from {}: {}", src, e);
-                    }
-                } else {
-                    let elapsed = start.elapsed();
-                    debug!("Query from {} handled in {:?}", src, elapsed);
+            // If at capacity, reply SERVFAIL instead of queueing forever.
+            match permits.try_acquire_owned() {
+                Ok(permit) => {
+                    tokio::spawn(async move {
+                        let _permit = permit;
+                        let start = Instant::now();
+                        if let Err(e) = handle_query(resolver, socket, data, src).await {
+                            if !matches!(e, DnsError::Io(_)) {
+                                warn!("Error handling query from {}: {}", src, e);
+                            }
+                        } else {
+                            let elapsed = start.elapsed();
+                            debug!("Query from {} handled in {:?}", src, elapsed);
+                        }
+                    });
                 }
-            });
+                Err(_) => {
+                    debug!("Dropping query from {}: server at capacity", src);
+                    if let Some(response) = quick_error_response(&data, 2) {
+                        let socket = socket.clone();
+                        tokio::spawn(async move {
+                            let _ = socket.send_to(&response, src).await;
+                        });
+                    }
+                }
+            }
         }
         Err(e) => {
             error!("Error receiving datagram: {}", e);

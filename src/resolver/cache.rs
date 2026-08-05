@@ -69,9 +69,8 @@ impl DnsCache {
 
     pub fn with_max_entries(max: usize) -> Self {
         let cap = NonZeroUsize::new(max.max(1)).expect("cache size > 0");
-        let stale_cap = NonZeroUsize::new(
-            (max / 5).max(1000).min(STALE_MAX_ENTRIES)
-        ).expect("stale cache size > 0");
+        let stale_cap = NonZeroUsize::new((max / 5).clamp(1000, STALE_MAX_ENTRIES))
+            .expect("stale cache size > 0");
         DnsCache {
             entries: LruCache::new(cap),
             stale_entries: LruCache::new(stale_cap),
@@ -82,7 +81,15 @@ impl DnsCache {
     }
 
     /// Insert a resource record into the cache.
-    pub fn insert(&mut self, name: Vec<u8>, rtype: u16, rclass: u16, ttl: u32, rdata: Vec<u8>, rdlength: u16) {
+    pub fn insert(
+        &mut self,
+        name: Vec<u8>,
+        rtype: u16,
+        rclass: u16,
+        ttl: u32,
+        rdata: Vec<u8>,
+        rdlength: u16,
+    ) {
         if ttl == 0 {
             return; // Don't cache zero-TTL records
         }
@@ -118,7 +125,12 @@ impl DnsCache {
     /// Lookup records for a given (name, type, class).
     /// Returns (records, ttl) where ttl is the minimum remaining TTL.
     /// Expired records are automatically moved to the stale store.
-    pub fn lookup(&mut self, name: &[u8], rtype: u16, rclass: u16) -> Option<(Vec<ResourceRecord>, u32)> {
+    pub fn lookup(
+        &mut self,
+        name: &[u8],
+        rtype: u16,
+        rclass: u16,
+    ) -> Option<(Vec<ResourceRecord>, u32)> {
         let key = (name.to_vec(), rtype, rclass);
         if let Some(entries) = self.entries.get_mut(&key) {
             // Separate expired entries into the stale store
@@ -184,7 +196,12 @@ impl DnsCache {
     /// Lookup stale (expired) records for serve-stale (RFC 8767).
     /// Returns records with TTL=0 to indicate they are stale.
     /// The caller should only use these if a fresh resolution fails.
-    pub fn lookup_stale(&mut self, name: &[u8], rtype: u16, rclass: u16) -> Option<Vec<ResourceRecord>> {
+    pub fn lookup_stale(
+        &mut self,
+        name: &[u8],
+        rtype: u16,
+        rclass: u16,
+    ) -> Option<Vec<ResourceRecord>> {
         let key = (name.to_vec(), rtype, rclass);
         if let Some(entries) = self.stale_entries.get(&key) {
             // Remove entries that are too old even for stale serving
@@ -238,9 +255,14 @@ impl DnsCache {
     /// Now called on every insert to keep memory bounded.
     pub fn purge_expired(&mut self) {
         let now = Instant::now();
-        let too_old: Vec<(Vec<u8>, u16, u16)> = self.stale_entries
+        let too_old: Vec<(Vec<u8>, u16, u16)> = self
+            .stale_entries
             .iter()
-            .filter(|(_, entries)| entries.iter().all(|e| now.duration_since(e.expires_at) >= STALE_MAX_AGE))
+            .filter(|(_, entries)| {
+                entries
+                    .iter()
+                    .all(|e| now.duration_since(e.expires_at) >= STALE_MAX_AGE)
+            })
             .map(|(k, _)| k.clone())
             .collect();
 

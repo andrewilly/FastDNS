@@ -23,6 +23,10 @@ use super::udp::{
 /// Maximum DNS message size over TCP (RFC 1035 recommends 65535).
 const MAX_TCP_MESSAGE: usize = 65535;
 
+/// Maximum concurrent TCP connections.
+/// Bounds memory: each connection holds a TcpStream (kernel buffers) plus a task.
+const MAX_CONNECTIONS: usize = 512;
+
 /// Start the TCP DNS server on the given address.
 /// Runs concurrently with the UDP server, sharing the same resolver.
 pub async fn run_tcp_server(
@@ -36,19 +40,33 @@ pub async fn run_tcp_server(
 
     info!("TCP server listening on {}", bind_addr);
 
+    let connection_permits = Arc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS));
+
     loop {
         match listener.accept().await {
             Ok((stream, peer)) => {
                 let resolver = resolver.clone();
-                tokio::spawn(async move {
-                    let start = Instant::now();
-                    if let Err(e) = handle_tcp_connection(stream, resolver).await {
-                        warn!("TCP error from {}: {}", peer, e);
-                    } else {
-                        let elapsed = start.elapsed();
-                        debug!("TCP query from {} handled in {:?}", peer, elapsed);
+                let permits = connection_permits.clone();
+                // If at capacity, close the connection immediately instead of
+                // accumulating tasks and sockets.
+                match permits.try_acquire_owned() {
+                    Ok(permit) => {
+                        tokio::spawn(async move {
+                            let _permit = permit;
+                            let start = Instant::now();
+                            if let Err(e) = handle_tcp_connection(stream, resolver).await {
+                                warn!("TCP error from {}: {}", peer, e);
+                            } else {
+                                let elapsed = start.elapsed();
+                                debug!("TCP query from {} handled in {:?}", peer, elapsed);
+                            }
+                        });
                     }
-                });
+                    Err(_) => {
+                        debug!("Rejecting TCP connection from {}: at capacity", peer);
+                        drop(stream);
+                    }
+                }
             }
             Err(e) => {
                 error!("TCP accept error: {}", e);

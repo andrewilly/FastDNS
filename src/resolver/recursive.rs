@@ -428,6 +428,28 @@ impl RecursiveResolver {
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(HEALTH_CHECK_INTERVAL).await;
+
+                // Prune health entries for servers not seen in 1 hour.
+                // Prevents the server_health HashMap from growing without bound.
+                {
+                    let mut health = server_health.lock().await;
+                    let stale_cutoff = Instant::now() - Duration::from_secs(3600);
+                    let before = health.len();
+                    health.retain(|_, h| {
+                        match h.last_success {
+                            Some(ts) => ts >= stale_cutoff,
+                            // Failed-only entries older than the cutoff are also dropped
+                            None => h.consecutive_failures < HEALTH_PENALTY_THRESHOLD,
+                        }
+                    });
+                    if health.len() != before {
+                        debug!(
+                            "Pruned {} stale server-health entries",
+                            before - health.len()
+                        );
+                    }
+                }
+
                 let servers_to_check: Vec<IpAddr> = {
                     let mut rtt = server_rtt.lock().await;
                     let mut servers: Vec<IpAddr> = rtt.iter().map(|(ip, _)| *ip).collect();
