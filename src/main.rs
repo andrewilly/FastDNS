@@ -298,8 +298,13 @@ fn main() {
         let addr = config.bind.parse::<SocketAddr>().unwrap();
         let domain = cli.healthcheck_domain.clone();
         let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
-        let ok = rt.block_on(async { health::run_healthcheck(addr, &domain).await });
-        process::exit(if ok { 0 } else { 1 });
+        let report = rt.block_on(async { health::run_healthcheck(addr, &domain).await });
+        if report.ok {
+            println!("✅ FastDNS OK — {}", report.detail);
+        } else {
+            println!("❌ FastDNS FAIL — {}", report.detail);
+        }
+        process::exit(if report.ok { 0 } else { 1 });
     }
 
     // Validate bind address
