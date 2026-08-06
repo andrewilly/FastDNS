@@ -14,8 +14,8 @@ dnssec = true
 # DNSSEC enforcement: "ad" (set AD bit), "enforce" (reject bogus), "off"
 dnssec_policy = "ad"
 
-# Maximum cache entries (default: 250000)
-cache_size = 250000
+# Maximum cache entries (default: 50000 — keeps RAM bounded)
+cache_size = 50000
 
 # Disable startup domain prefetching
 no_prefetch = false

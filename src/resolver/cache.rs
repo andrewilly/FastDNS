@@ -19,6 +19,12 @@ const STALE_MAX_AGE: Duration = Duration::from_secs(6 * 3600);
 /// Maximum number of stale entries to keep (same as main cache, avoids unbounded growth).
 const STALE_MAX_ENTRIES: usize = 50_000;
 
+/// Maximum number of records stored per cache key.
+/// Prevents a single (name, type, class) key from accumulating an unbounded
+/// Vec of duplicate/large records (RRSIG, DNSKEY, HTTPS, TXT...), which is a
+/// primary driver of memory growth over hours of operation.
+const MAX_RECORDS_PER_KEY: usize = 16;
+
 /// A cached entry with expiry tracking
 #[derive(Debug, Clone)]
 struct CacheEntry {
@@ -111,9 +117,21 @@ impl DnsCache {
         let key = (name, rtype, rclass);
         let entry = CacheEntry { record, expires_at };
 
-        // lru::LruCache doesn't have entry() API, use get_mut + put
+        // lru::LruCache doesn't have entry() API, use get_mut + put.
+        // Bounded per key: dedupe identical rdata and cap the Vec length so a
+        // single key cannot accumulate unbounded records over time.
         match self.entries.get_mut(&key) {
-            Some(vec) => vec.push(entry),
+            Some(vec) => {
+                // Skip duplicates (same rdata) to avoid unbounded growth.
+                if vec.iter().any(|e| e.record.rdata == entry.record.rdata) {
+                    return;
+                }
+                if vec.len() >= MAX_RECORDS_PER_KEY {
+                    // Replace the oldest record with the new one.
+                    vec.remove(0);
+                }
+                vec.push(entry);
+            }
             None => {
                 self.entries.put(key, vec![entry]);
             }

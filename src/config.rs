@@ -16,8 +16,10 @@ use crate::server::udp::ServerConfig;
 /// Default bind address
 const DEFAULT_BIND: &str = "127.0.0.1:53";
 
-/// Default cache size
-const DEFAULT_CACHE_SIZE: usize = 250_000;
+/// Default cache size.
+/// 50k keys (each capped at 16 records, without large DNSSEC records) keeps
+/// resident memory around ~150-250 MB; larger values caused multi-GB growth.
+const DEFAULT_CACHE_SIZE: usize = 50_000;
 
 /// Default upstream DNS
 #[allow(dead_code)]

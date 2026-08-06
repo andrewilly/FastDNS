@@ -1574,7 +1574,12 @@ impl RecursiveResolver {
         let mut ns_cache = self.ns_cache.lock().await;
         for section in [&msg.answers, &msg.authorities, &msg.additionals] {
             for rec in section.iter() {
-                if rec.rtype != 41 {
+                // Skip OPT (41) and large DNSSEC records (RRSIG=46, DNSKEY=48).
+                // DNSKEY/RRSIG are large (~2KB / ~300B) and re-inserted on every
+                // signed response; they are fetched on demand by resolve_dnssec
+                // when validation needs them. Keeping them out of the main cache
+                // avoids a major source of unbounded memory growth.
+                if rec.rtype != 41 && rec.rtype != 46 && rec.rtype != 48 {
                     cache.insert_records(std::slice::from_ref(rec));
                 }
                 if rec.rtype == 1 || rec.rtype == 28 {

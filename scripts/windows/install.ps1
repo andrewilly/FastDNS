@@ -140,7 +140,7 @@ Write-Log ""
 Write-Log "Phase 3: Create Windows service" -Color Cyan
 Write-Log ""
 
-$BinPath = "`"$BinaryPath`" -b 127.0.0.1:53 -c 250000 --dnssec --upstream 8.8.8.8:53 --doh"
+$BinPath = "`"$BinaryPath`" -b 127.0.0.1:53 -c 50000 --dnssec --upstream 8.8.8.8:53 --doh"
 
 Write-Log "Service name: $ServiceName" -Color White
 Write-Log "Binary:       $BinPath" -Color White
