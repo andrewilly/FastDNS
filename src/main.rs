@@ -269,8 +269,15 @@ fn main() {
         metrics: cli.metrics,
     });
 
-    // Initialize logging (file + stderr)
-    init_logging(&config);
+    // Initialize logging (file + stderr).
+    // One-shot/diagnostic modes (healthcheck, query, service install, verbose)
+    // don't need file logging — use stderr directly to avoid noisy
+    // "File logging unavailable" warnings when run as a normal user.
+    let one_shot = cli.healthcheck
+        || cli.query.is_some()
+        || cli.install_service
+        || cli.uninstall_service;
+    init_logging(&config, one_shot || cli.verbose);
 
     // Validate configuration
     if let Err(errors) = config.validate() {
@@ -527,7 +534,9 @@ fn main() {
 }
 
 /// Initialize tracing/logging based on config.
-fn init_logging(config: &FastDnsConfig) {
+/// `prefer_stderr`: when true (one-shot/verbose modes), log to stderr directly
+/// without attempting file logging to avoid permission warnings.
+fn init_logging(config: &FastDnsConfig, prefer_stderr: bool) {
     let log_level = if config.verbose {
         "debug"
     } else {
@@ -546,7 +555,7 @@ fn init_logging(config: &FastDnsConfig) {
             .try_init();
     };
 
-    if config.log_file.is_empty() {
+    if config.log_file.is_empty() || prefer_stderr {
         init_stderr();
         return;
     }
