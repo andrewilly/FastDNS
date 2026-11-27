@@ -43,6 +43,24 @@ else
     echo "ℹ️  dig not installed (skipping resolution tests)"
 fi
 
+# 5. Is the system actually using FastDNS (127.0.0.1)?
+sysdns=""
+case "$(uname -s)" in
+    Darwin)
+        sysdns=$(scutil --dns 2>/dev/null | awk -F': ' '/nameserver\[0\]/{print $2; exit}')
+        ;;
+    *)
+        sysdns=$(awk '/^nameserver/{print $2; exit}' /etc/resolv.conf 2>/dev/null)
+        ;;
+esac
+if [ "$sysdns" = "127.0.0.1" ] || [ "$sysdns" = "::1" ]; then
+    echo "✅ system DNS points to FastDNS ($sysdns) — FastDNS is in use"
+else
+    echo "⚠️  system DNS is '${sysdns:-unknown}', not 127.0.0.1 — FastDNS runs but may NOT be in use"
+    echo "   macOS: sudo networksetup -setdnsservers Wi-Fi 127.0.0.1"
+    echo "   Linux: set 'nameserver 127.0.0.1' in /etc/resolv.conf"
+fi
+
 echo
 if [ "$ok" = 1 ]; then
     echo "RESULT: FastDNS is working ✅"
