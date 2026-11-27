@@ -103,6 +103,15 @@ jobs:
           cp /tmp/release-artifacts/fastdns-windows-x86_64/fastdns.exe /tmp/upload/fastdns-windows-x86_64.exe
           ls -lh /tmp/upload/
           file /tmp/upload/*
+      - name: Verify Cargo.toml version matches release tag
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          VER=$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
+          echo "Cargo.toml version: $VER | release tag: $TAG"
+          if [ "v$VER" != "$TAG" ]; then
+            echo "::error::Version mismatch: Cargo.toml=$VER but tag=$TAG. Bump Cargo.toml version."
+            exit 1
+          fi
       - uses: softprops/action-gh-release@v2
         with:
           name: FastDNS ${{ github.event.inputs.tag || github.ref_name }}
