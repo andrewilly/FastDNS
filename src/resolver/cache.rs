@@ -5,6 +5,7 @@ use std::num::NonZeroUsize;
 use std::time::{Duration, Instant};
 
 use lru::LruCache;
+use serde::{Deserialize, Serialize};
 use tracing::{debug, trace};
 
 use crate::dns::types::{self, ResourceRecord};
@@ -34,6 +35,40 @@ struct NegEntry {
     expires_at: Instant,
     /// true = NXDOMAIN, false = NODATA (domain exists, but not this type).
     nxdomain: bool,
+}
+
+/// A serializable cache entry for on-disk persistence (opt-in warm start).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SnapshotEntry {
+    pub name: Vec<u8>,
+    pub rtype: u16,
+    pub rclass: u16,
+    /// Remaining TTL in seconds at snapshot time.
+    pub ttl: u32,
+    pub rdata: Vec<u8>,
+    pub rdlength: u16,
+}
+
+/// Platform-appropriate path for the persistent cache file.
+pub fn cache_file_path() -> std::path::PathBuf {
+    #[cfg(target_os = "windows")]
+    {
+        let base = std::env::var("APPDATA").unwrap_or_else(|_| "C:\\ProgramData".to_string());
+        let mut p = std::path::PathBuf::from(base);
+        p.push("FastDNS");
+        let _ = std::fs::create_dir_all(&p);
+        p.push("dnscache.json");
+        p
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+        let mut p = std::path::PathBuf::from(home);
+        p.push(".fastdns");
+        let _ = std::fs::create_dir_all(&p);
+        p.push("dnscache.json");
+        p
+    }
 }
 
 /// A cached entry with expiry tracking
@@ -339,6 +374,42 @@ impl DnsCache {
                 None
             }
             None => None,
+        }
+    }
+
+    /// Snapshot all non-expired entries (bounded by cache capacity) for persistence.
+    pub fn snapshot(&self) -> Vec<SnapshotEntry> {
+        let mut out = Vec::new();
+        for (key, entries) in self.entries.iter() {
+            for e in entries {
+                if !e.is_expired() {
+                    out.push(SnapshotEntry {
+                        name: key.0.clone(),
+                        rtype: key.1,
+                        rclass: key.2,
+                        ttl: e.ttl_remaining(),
+                        rdata: e.record.rdata.clone(),
+                        rdlength: e.record.rdlength,
+                    });
+                }
+            }
+        }
+        out
+    }
+
+    /// Load a persisted snapshot, inserting each entry with its remaining TTL.
+    pub fn load_snapshot(&mut self, entries: &[SnapshotEntry]) {
+        for s in entries {
+            if s.ttl > 0 {
+                self.insert(
+                    s.name.clone(),
+                    s.rtype,
+                    s.rclass,
+                    s.ttl,
+                    s.rdata.clone(),
+                    s.rdlength,
+                );
+            }
         }
     }
 

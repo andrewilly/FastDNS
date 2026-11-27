@@ -222,6 +222,10 @@ struct Cli {
     #[arg(long)]
     user: Option<String>,
 
+    /// Persist the DNS cache to disk for a warm start on restart
+    #[arg(long)]
+    persist_cache: bool,
+
     /// Enable Prometheus metrics
     #[arg(long)]
     metrics: bool,
@@ -271,6 +275,7 @@ fn main() {
         log_level: cli.log_level.clone(),
         api_bind: cli.api_bind.clone(),
         user: cli.user.clone(),
+        persist_cache: cli.persist_cache,
         metrics: cli.metrics,
     });
 
@@ -421,6 +426,7 @@ fn main() {
 
     // User to drop privileges to after binding privileged ports (optional).
     let run_as_user = config.user.clone();
+    let persist = config.persist_cache;
 
     // Create tokio runtime
     let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
@@ -436,6 +442,20 @@ fn main() {
             .await
             .expect("Failed to create resolver"),
         );
+
+        // Opt-in persistent cache: warm start from disk + periodic save.
+        let cache_path = crate::resolver::cache::cache_file_path();
+        if persist {
+            resolver.load_cache_snapshot(&cache_path).await;
+            let saver = resolver.clone();
+            let sp = cache_path.clone();
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(Duration::from_secs(300)).await;
+                    saver.save_cache_snapshot(&sp).await;
+                }
+            });
+        }
 
         // Initialize blocklist if enabled
         let blocklist = if server_config.blocklist_mode != "none" {
@@ -556,6 +576,9 @@ fn main() {
         // Give running queries time to finish
         info!("Shutting down gracefully...");
         tokio::time::sleep(SHUTDOWN_GRACE_PERIOD).await;
+        if persist {
+            resolver.save_cache_snapshot(&cache_path).await;
+        }
         info!("FastDNS stopped.");
     });
 }

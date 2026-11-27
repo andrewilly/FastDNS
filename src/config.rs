@@ -106,6 +106,9 @@ pub struct FastDnsConfig {
     /// Empty/None = keep current user (e.g. root).
     pub user: Option<String>,
 
+    /// Persist the DNS cache to disk for a warm start on restart (opt-in).
+    pub persist_cache: bool,
+
     /// Path to TLS certificate for DoT
     pub tls_cert: String,
 
@@ -151,6 +154,7 @@ impl Default for FastDnsConfig {
             api_bind: String::new(),
             metrics: false,
             user: None,
+            persist_cache: false,
             tls_cert: String::new(),
             tls_key: String::new(),
             dnssec_policy: "ad".to_string(),
@@ -238,6 +242,9 @@ impl FastDnsConfig {
         }
         if let Some(u) = &cli.user {
             self.user = Some(u.clone());
+        }
+        if cli.persist_cache {
+            self.persist_cache = true;
         }
     }
 
@@ -347,6 +354,7 @@ pub struct CliOverrides {
     pub api_bind: Option<String>,
     pub metrics: bool,
     pub user: Option<String>,
+    pub persist_cache: bool,
 }
 
 /// Domains to pre-fetch at startup (~500 top domains).

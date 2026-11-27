@@ -1675,6 +1675,42 @@ impl RecursiveResolver {
         cache.clear();
     }
 
+    /// Persist the current cache to `path` (JSON). Best-effort; errors are logged.
+    pub async fn save_cache_snapshot(&self, path: &std::path::Path) {
+        let snap = {
+            let cache = self.cache.lock().await;
+            cache.snapshot()
+        };
+        if snap.is_empty() {
+            return;
+        }
+        match serde_json::to_vec(&snap) {
+            Ok(bytes) => match std::fs::write(path, bytes) {
+                Ok(_) => debug!("saved {} cache entries to {}", snap.len(), path.display()),
+                Err(e) => debug!("cache save failed ({}): {}", path.display(), e),
+            },
+            Err(e) => debug!("cache serialize failed: {}", e),
+        }
+    }
+
+    /// Load a persisted cache snapshot from `path`, if present.
+    pub async fn load_cache_snapshot(&self, path: &std::path::Path) {
+        let Ok(bytes) = std::fs::read(path) else {
+            return;
+        };
+        match serde_json::from_slice::<Vec<crate::resolver::cache::SnapshotEntry>>(&bytes) {
+            Ok(entries) => {
+                let n = entries.len();
+                {
+                    let mut cache = self.cache.lock().await;
+                    cache.load_snapshot(&entries);
+                }
+                info!("Loaded {} cache entries from {}", n, path.display());
+            }
+            Err(e) => debug!("cache load failed ({}): {}", path.display(), e),
+        }
+    }
+
     #[allow(dead_code)]
     pub async fn stats(&self) -> ResolverStats {
         self.stats.lock().await.clone()
