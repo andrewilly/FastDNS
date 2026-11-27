@@ -5,7 +5,7 @@
 //! The wire format prepends a 2-byte length prefix to each DNS message.
 
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -26,6 +26,9 @@ const MAX_TCP_MESSAGE: usize = 65535;
 /// Maximum concurrent TCP connections.
 /// Bounds memory: each connection holds a TcpStream (kernel buffers) plus a task.
 const MAX_CONNECTIONS: usize = 512;
+
+/// Maximum time to wait for a client to send/receive a complete message.
+const TCP_IO_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Start the TCP DNS server on the given address.
 /// Runs concurrently with the UDP server, sharing the same resolver.
@@ -88,13 +91,21 @@ pub async fn handle_tcp_connection(
 ) -> Result<(), DnsError> {
     // Read the 2-byte length prefix
     let mut len_buf = [0u8; 2];
-    stream.read_exact(&mut len_buf).await.map_err(|e| {
-        if e.kind() == std::io::ErrorKind::UnexpectedEof {
-            DnsError::Malformed("TCP connection closed before length prefix")
-        } else {
-            DnsError::Io(e)
+    match tokio::time::timeout(TCP_IO_TIMEOUT, stream.read_exact(&mut len_buf)).await {
+        Ok(Ok(_)) => {}
+        Ok(Err(e)) => {
+            return Err(if e.kind() == std::io::ErrorKind::UnexpectedEof {
+                DnsError::Malformed("TCP connection closed before length prefix")
+            } else {
+                DnsError::Io(e)
+            });
         }
-    })?;
+        Err(_) => {
+            return Err(DnsError::Transport(
+                "TCP read timeout waiting for length prefix".to_string(),
+            ));
+        }
+    }
 
     let msg_len = u16::from_be_bytes(len_buf) as usize;
 
@@ -104,13 +115,21 @@ pub async fn handle_tcp_connection(
 
     // Read the DNS message bytes
     let mut query_data = vec![0u8; msg_len];
-    stream.read_exact(&mut query_data).await.map_err(|e| {
-        if e.kind() == std::io::ErrorKind::UnexpectedEof {
-            DnsError::Malformed("TCP connection closed before message body")
-        } else {
-            DnsError::Io(e)
+    match tokio::time::timeout(TCP_IO_TIMEOUT, stream.read_exact(&mut query_data)).await {
+        Ok(Ok(_)) => {}
+        Ok(Err(e)) => {
+            return Err(if e.kind() == std::io::ErrorKind::UnexpectedEof {
+                DnsError::Malformed("TCP connection closed before message body")
+            } else {
+                DnsError::Io(e)
+            });
         }
-    })?;
+        Err(_) => {
+            return Err(DnsError::Transport(
+                "TCP read timeout waiting for message body".to_string(),
+            ));
+        }
+    }
 
     // Decode the query
     let request = match decode_message(&query_data) {
@@ -204,7 +223,15 @@ async fn write_tcp_response(stream: &mut TcpStream, data: &[u8]) -> Result<(), D
     buf.extend_from_slice(&len_prefix);
     buf.extend_from_slice(data);
 
-    stream.write_all(&buf).await.map_err(DnsError::Io)?;
-    stream.flush().await.map_err(DnsError::Io)?;
-    Ok(())
+    match tokio::time::timeout(TCP_IO_TIMEOUT, async {
+        stream.write_all(&buf).await?;
+        stream.flush().await?;
+        Ok::<(), std::io::Error>(())
+    })
+    .await
+    {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(e)) => Err(DnsError::Io(e)),
+        Err(_) => Err(DnsError::Transport("TCP write timeout".to_string())),
+    }
 }

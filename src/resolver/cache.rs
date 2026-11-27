@@ -25,6 +25,17 @@ const STALE_MAX_ENTRIES: usize = 50_000;
 /// primary driver of memory growth over hours of operation.
 const MAX_RECORDS_PER_KEY: usize = 16;
 
+/// Maximum number of negative-answer entries (NXDOMAIN/NODATA, RFC 2308).
+const NEG_MAX_ENTRIES: usize = 20_000;
+
+/// A cached negative answer (RFC 2308).
+#[derive(Debug, Clone)]
+struct NegEntry {
+    expires_at: Instant,
+    /// true = NXDOMAIN, false = NODATA (domain exists, but not this type).
+    nxdomain: bool,
+}
+
 /// A cached entry with expiry tracking
 #[derive(Debug, Clone)]
 struct CacheEntry {
@@ -55,6 +66,8 @@ pub struct DnsCache {
     /// Stale (expired) entries kept for serve-stale.
     /// Capacity-limited to prevent unbounded memory growth.
     stale_entries: LruCache<(Vec<u8>, u16, u16), Vec<CacheEntry>>,
+    /// Negative cache (RFC 2308): NXDOMAIN / NODATA answers.
+    negative: LruCache<(Vec<u8>, u16, u16), NegEntry>,
     max_entries: usize,
     hits: u64,
     misses: u64,
@@ -64,9 +77,11 @@ impl DnsCache {
     pub fn new() -> Self {
         let cap = NonZeroUsize::new(MAX_CACHE_ENTRIES).expect("MAX_CACHE_ENTRIES > 0");
         let stale_cap = NonZeroUsize::new(STALE_MAX_ENTRIES).expect("STALE_MAX_ENTRIES > 0");
+        let neg_cap = NonZeroUsize::new(NEG_MAX_ENTRIES).expect("NEG_MAX_ENTRIES > 0");
         DnsCache {
             entries: LruCache::new(cap),
             stale_entries: LruCache::new(stale_cap),
+            negative: LruCache::new(neg_cap),
             max_entries: MAX_CACHE_ENTRIES,
             hits: 0,
             misses: 0,
@@ -77,9 +92,12 @@ impl DnsCache {
         let cap = NonZeroUsize::new(max.max(1)).expect("cache size > 0");
         let stale_cap = NonZeroUsize::new((max / 5).clamp(1000, STALE_MAX_ENTRIES))
             .expect("stale cache size > 0");
+        let neg_cap = NonZeroUsize::new((max / 2).clamp(1000, NEG_MAX_ENTRIES))
+            .expect("negative cache size > 0");
         DnsCache {
             entries: LruCache::new(cap),
             stale_entries: LruCache::new(stale_cap),
+            negative: LruCache::new(neg_cap),
             max_entries: max,
             hits: 0,
             misses: 0,
@@ -289,10 +307,46 @@ impl DnsCache {
         }
     }
 
+    /// Cache a negative answer (NXDOMAIN or NODATA) per RFC 2308.
+    /// `ttl` should come from the SOA negative TTL; clamped to [1, 3600].
+    pub fn insert_negative(
+        &mut self,
+        name: &[u8],
+        rtype: u16,
+        rclass: u16,
+        ttl: u32,
+        nxdomain: bool,
+    ) {
+        let ttl = ttl.clamp(1, 3600);
+        let expires_at = Instant::now() + Duration::from_secs(ttl as u64);
+        self.negative.put(
+            (name.to_vec(), rtype, rclass),
+            NegEntry {
+                expires_at,
+                nxdomain,
+            },
+        );
+    }
+
+    /// Look up a cached negative answer.
+    /// `Some(true)` = NXDOMAIN, `Some(false)` = NODATA, `None` = not cached/expired.
+    pub fn lookup_negative(&mut self, name: &[u8], rtype: u16, rclass: u16) -> Option<bool> {
+        let key = (name.to_vec(), rtype, rclass);
+        match self.negative.get(&key) {
+            Some(e) if Instant::now() < e.expires_at => Some(e.nxdomain),
+            Some(_) => {
+                self.negative.pop_entry(&key);
+                None
+            }
+            None => None,
+        }
+    }
+
     /// Clear all entries from the cache (including stale entries).
     pub fn clear(&mut self) {
         self.entries.clear();
         self.stale_entries.clear();
+        self.negative.clear();
         self.hits = 0;
         self.misses = 0;
     }
@@ -302,7 +356,7 @@ impl DnsCache {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty() && self.stale_entries.is_empty()
+        self.entries.is_empty() && self.stale_entries.is_empty() && self.negative.is_empty()
     }
 
     pub fn stale_len(&self) -> usize {

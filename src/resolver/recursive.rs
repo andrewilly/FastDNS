@@ -620,6 +620,20 @@ impl RecursiveResolver {
             stats.cache_misses += 1;
         }
 
+        // 1a-bis. Negative cache (RFC 2308): cached NXDOMAIN / NODATA answers.
+        {
+            let mut cache = self.cache.lock().await;
+            if let Some(nxdomain) = cache.lookup_negative(&encoded_name, rtype, rclass) {
+                let mut stats = self.stats.lock().await;
+                stats.cache_hits += 1;
+                stats.total_queries += 1;
+                if nxdomain {
+                    return Err(DnsError::NxDomain(Vec::new(), false));
+                }
+                return Ok((Vec::new(), false));
+            }
+        }
+
         // 1b. Serve-stale (RFC 8767): if we have expired records, attempt refresh;
         //     if refresh fails, return stale data instead of SERVFAIL.
         let stale_records: Option<Vec<ResourceRecord>> = {
@@ -677,6 +691,10 @@ impl RecursiveResolver {
         if let Ok(ref pair) = result {
             let mut cache = self.cache.lock().await;
             cache.insert_records(&pair.0);
+            // NODATA (empty answer): cache negative per RFC 2308 for a short TTL.
+            if pair.0.is_empty() {
+                cache.insert_negative(&encoded_name, rtype, rclass, 300, false);
+            }
             let hits = cache.hits();
             let misses = cache.misses();
             debug!(
@@ -687,6 +705,17 @@ impl RecursiveResolver {
                 hits + misses
             );
         } else {
+            // Cache NXDOMAIN (RFC 2308) using the SOA TTL when available.
+            if let Err(DnsError::NxDomain(ref soa, _)) = result {
+                let neg_ttl = soa
+                    .iter()
+                    .filter(|r| r.rtype == 6)
+                    .map(|r| r.ttl)
+                    .min()
+                    .unwrap_or(300);
+                let mut cache = self.cache.lock().await;
+                cache.insert_negative(&encoded_name, rtype, rclass, neg_ttl, true);
+            }
             let mut stats = self.stats.lock().await;
             stats.failed_queries += 1;
             warn!("❌ Failed to resolve {}: {:?}", name, result.as_ref().err());
