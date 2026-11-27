@@ -273,10 +273,8 @@ fn main() {
     // One-shot/diagnostic modes (healthcheck, query, service install, verbose)
     // don't need file logging — use stderr directly to avoid noisy
     // "File logging unavailable" warnings when run as a normal user.
-    let one_shot = cli.healthcheck
-        || cli.query.is_some()
-        || cli.install_service
-        || cli.uninstall_service;
+    let one_shot =
+        cli.healthcheck || cli.query.is_some() || cli.install_service || cli.uninstall_service;
     init_logging(&config, one_shot || cli.verbose);
 
     // Validate configuration
@@ -583,7 +581,10 @@ fn init_logging(config: &FastDnsConfig, prefer_stderr: bool) {
                 .try_init();
         }
         Err(e) => {
-            eprintln!("⚠️  File logging unavailable ({}), falling back to stderr", e);
+            eprintln!(
+                "⚠️  File logging unavailable ({}), falling back to stderr",
+                e
+            );
             init_stderr();
         }
     }

@@ -88,9 +88,7 @@ pub async fn run_healthcheck(bind_addr: SocketAddr, domain: &str) -> HealthRepor
                         ok: false,
                         detail: format!(
                             "{} answered RCODE={} in {} ms",
-                            bind_addr,
-                            resp.header.rcode,
-                            elapsed_ms
+                            bind_addr, resp.header.rcode, elapsed_ms
                         ),
                     }
                 }
@@ -106,7 +104,11 @@ pub async fn run_healthcheck(bind_addr: SocketAddr, domain: &str) -> HealthRepor
         },
         Err(_) => HealthReport {
             ok: false,
-            detail: format!("timeout after {} ms — no response from {}", timeout.as_millis(), bind_addr),
+            detail: format!(
+                "timeout after {} ms — no response from {}",
+                timeout.as_millis(),
+                bind_addr
+            ),
         },
     }
 }
