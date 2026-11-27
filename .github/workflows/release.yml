@@ -5,6 +5,11 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v0.2.0)'
+        required: false
+        default: ''
 
 env:
   CARGO_TERM_COLOR: always
@@ -100,8 +105,8 @@ jobs:
           file /tmp/upload/*
       - uses: softprops/action-gh-release@v2
         with:
-          name: FastDNS ${{ github.ref_name }}
-          tag_name: ${{ github.ref_name }}
+          name: FastDNS ${{ github.event.inputs.tag || github.ref_name }}
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
           draft: false
           prerelease: false
           generate_release_notes: true
