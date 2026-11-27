@@ -55,11 +55,15 @@ pub async fn run_server(
     config: ServerConfig,
     stop_signal: Arc<AtomicBool>,
     resolver: Arc<RecursiveResolver>,
+    prebound: Option<Arc<UdpSocket>>,
 ) -> Result<(), DnsError> {
-    let socket = Arc::new(UdpSocket::bind(config.bind_addr).await.map_err(|e| {
-        error!("Cannot bind to {}: {}", config.bind_addr, e);
-        DnsError::Io(e)
-    })?);
+    let socket = match prebound {
+        Some(s) => s,
+        None => Arc::new(UdpSocket::bind(config.bind_addr).await.map_err(|e| {
+            error!("Cannot bind to {}: {}", config.bind_addr, e);
+            DnsError::Io(e)
+        })?),
+    };
 
     info!(
         "🚀 FastDNS server listening on {} (IPv6={}, DNSSEC={})",

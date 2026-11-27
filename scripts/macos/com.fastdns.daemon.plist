@@ -16,8 +16,7 @@
         <string>-b</string>
         <string>127.0.0.1:53</string>
         <string>-c</string>
-        <string>250000</string>
-        <string>--dnssec</string>
+        <string>50000</string>
     </array>
 
     <!-- Keep the process alive: restart only if it crashes/exits abnormally -->

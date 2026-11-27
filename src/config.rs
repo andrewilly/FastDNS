@@ -102,6 +102,10 @@ pub struct FastDnsConfig {
     /// Enable Prometheus metrics
     pub metrics: bool,
 
+    /// Drop privileges to this user after binding privileged ports (Unix only).
+    /// Empty/None = keep current user (e.g. root).
+    pub user: Option<String>,
+
     /// Path to TLS certificate for DoT
     pub tls_cert: String,
 
@@ -146,6 +150,7 @@ impl Default for FastDnsConfig {
             log_level: "info".to_string(),
             api_bind: String::new(),
             metrics: false,
+            user: None,
             tls_cert: String::new(),
             tls_key: String::new(),
             dnssec_policy: "ad".to_string(),
@@ -230,6 +235,9 @@ impl FastDnsConfig {
         }
         if cli.metrics {
             self.metrics = true;
+        }
+        if let Some(u) = &cli.user {
+            self.user = Some(u.clone());
         }
     }
 
@@ -338,6 +346,7 @@ pub struct CliOverrides {
     pub log_level: Option<String>,
     pub api_bind: Option<String>,
     pub metrics: bool,
+    pub user: Option<String>,
 }
 
 /// Domains to pre-fetch at startup (~500 top domains).

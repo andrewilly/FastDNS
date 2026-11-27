@@ -135,7 +135,7 @@ mod service_handler {
                     }
                     cancel_clone.store(true, Ordering::SeqCst);
                 });
-                let _ = run_server(config.clone(), cancel, resolver).await;
+                let _ = run_server(config.clone(), cancel, resolver, None).await;
             });
         }
     }
@@ -218,6 +218,10 @@ struct Cli {
     #[arg(long)]
     api_bind: Option<String>,
 
+    /// Drop privileges to this user after binding privileged ports (Unix; start as root)
+    #[arg(long)]
+    user: Option<String>,
+
     /// Enable Prometheus metrics
     #[arg(long)]
     metrics: bool,
@@ -266,6 +270,7 @@ fn main() {
         log_file: cli.log_file.clone(),
         log_level: cli.log_level.clone(),
         api_bind: cli.api_bind.clone(),
+        user: cli.user.clone(),
         metrics: cli.metrics,
     });
 
@@ -414,6 +419,9 @@ fn main() {
 
     let server_config = config.to_server_config();
 
+    // User to drop privileges to after binding privileged ports (optional).
+    let run_as_user = config.user.clone();
+
     // Create tokio runtime
     let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
 
@@ -468,18 +476,39 @@ fn main() {
         // Create server cancel handle for shutdown
         let cancel_flag = Arc::new(AtomicBool::new(false));
 
+        // Optional privilege dropping: pre-bind privileged sockets as root, then drop.
+        let (udp_prebound, tcp_prebound) = if let Some(ref run_user) = run_as_user {
+            let udp = Arc::new(
+                tokio::net::UdpSocket::bind(server_config.bind_addr)
+                    .await
+                    .expect("failed to pre-bind UDP socket"),
+            );
+            let tcp = tokio::net::TcpListener::bind(server_config.bind_addr)
+                .await
+                .expect("failed to pre-bind TCP listener");
+            if let Err(e) = drop_privileges(run_user) {
+                error!("Failed to drop privileges to '{}': {}", run_user, e);
+                std::process::exit(1);
+            }
+            info!("🔒 Dropped privileges to user '{}'", run_user);
+            (Some(udp), Some(tcp))
+        } else {
+            (None, None)
+        };
+
         // Start UDP server
         let udp_resolver = resolver.clone();
         let udp_cancel = cancel_flag.clone();
         let udp_config = server_config.clone();
-        let mut udp_handle =
-            tokio::spawn(async move { run_server(udp_config, udp_cancel, udp_resolver).await });
+        let mut udp_handle = tokio::spawn(async move {
+            run_server(udp_config, udp_cancel, udp_resolver, udp_prebound).await
+        });
 
         // Start TCP server
         let tcp_resolver = resolver.clone();
         let tcp_addr: SocketAddr = server_config.bind_addr;
         let mut tcp_handle =
-            tokio::spawn(async move { run_tcp_server(tcp_addr, tcp_resolver).await });
+            tokio::spawn(async move { run_tcp_server(tcp_addr, tcp_resolver, tcp_prebound).await });
 
         // Wait for shutdown signal (Unix: SIGINT/SIGTERM, Windows: Ctrl+C)
         let cancel = cancel_flag.clone();
@@ -588,6 +617,34 @@ fn init_logging(config: &FastDnsConfig, prefer_stderr: bool) {
             init_stderr();
         }
     }
+}
+
+/// Drop privileges to the given Unix user (call after binding privileged ports).
+#[cfg(unix)]
+fn drop_privileges(user: &str) -> Result<(), String> {
+    use nix::unistd::{setgid, setuid, Uid, User};
+    #[cfg(not(target_vendor = "apple"))]
+    use nix::unistd::{setgroups, Gid};
+    if !Uid::effective().is_root() {
+        return Err("cannot drop privileges: not running as root".to_string());
+    }
+    let ent = User::from_name(user)
+        .map_err(|e| format!("user lookup '{}' failed: {}", user, e))?
+        .ok_or_else(|| format!("user '{}' not found", user))?;
+    // Drop supplementary groups where supported (nix gates setgroups out on Apple).
+    #[cfg(not(target_vendor = "apple"))]
+    {
+        let empty: [Gid; 0] = [];
+        setgroups(&empty).map_err(|e| format!("setgroups failed: {}", e))?;
+    }
+    setgid(ent.gid).map_err(|e| format!("setgid failed: {}", e))?;
+    setuid(ent.uid).map_err(|e| format!("setuid failed: {}", e))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn drop_privileges(_user: &str) -> Result<(), String> {
+    Err("privilege dropping is only supported on Unix".to_string())
 }
 
 /// Check bind address privileges.
@@ -1124,7 +1181,20 @@ fn install_service_route(config: &FastDnsConfig) {
         let exe_path = std::env::current_exe()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|_| "fastdns.exe".to_string());
-        let bin_path = format!("\"{}\" -b 127.0.0.1:53 -c 250000 --dnssec", exe_path);
+        // Reflect the current config (DNSSEC only if explicitly enabled).
+        let mut bin_path = format!(
+            "\"{}\" -b {} -c {}",
+            exe_path, config.bind, config.cache_size
+        );
+        if config.dnssec {
+            bin_path.push_str(" --dnssec");
+        }
+        if let Some(ref up) = config.upstream {
+            bin_path.push_str(&format!(" --upstream {}", up));
+            if config.doh {
+                bin_path.push_str(" --doh");
+            }
+        }
 
         // Clean: remove old service if exists
         println!("📋 Removing previous FastDNS service (if any)...");

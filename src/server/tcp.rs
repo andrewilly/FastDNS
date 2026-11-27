@@ -35,11 +35,15 @@ const TCP_IO_TIMEOUT: Duration = Duration::from_secs(5);
 pub async fn run_tcp_server(
     bind_addr: std::net::SocketAddr,
     resolver: Arc<RecursiveResolver>,
+    prebound: Option<TcpListener>,
 ) -> Result<(), DnsError> {
-    let listener = TcpListener::bind(bind_addr).await.map_err(|e| {
-        error!("Cannot bind TCP to {}: {}", bind_addr, e);
-        DnsError::Io(e)
-    })?;
+    let listener = match prebound {
+        Some(l) => l,
+        None => TcpListener::bind(bind_addr).await.map_err(|e| {
+            error!("Cannot bind TCP to {}: {}", bind_addr, e);
+            DnsError::Io(e)
+        })?,
+    };
 
     info!("TCP server listening on {}", bind_addr);
 
