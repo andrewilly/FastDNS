@@ -38,6 +38,10 @@ use super::root_hints;
 
 /// How long to wait for a single UDP query response (per-server)
 const QUERY_TIMEOUT: Duration = Duration::from_secs(1);
+/// Hard upper bound on a single client-facing resolution. Guarantees that no
+/// query can hang indefinitely (e.g. degraded network / DNSSEC re-entrancy),
+/// so UDP permits are always released and the server cannot wedge.
+const RESOLVE_TIMEOUT: Duration = Duration::from_secs(12);
 /// How long to wait for a single UDP query response (per-server) when serving stale
 const STALE_QUERY_TIMEOUT: Duration = Duration::from_secs(3);
 /// Maximum query iterations
@@ -665,9 +669,15 @@ impl RecursiveResolver {
         }
 
         // 2. Recursive resolution (using &self, interior mutability via Mutex)
-        let result = self
-            .resolve_recursive(encoded_name.clone(), rtype, rclass, 0, true)
-            .await;
+        let result = match tokio::time::timeout(
+            RESOLVE_TIMEOUT,
+            self.resolve_recursive(encoded_name.clone(), rtype, rclass, 0, true),
+        )
+        .await
+        {
+            Ok(r) => r,
+            Err(_) => Err(DnsError::Transport("resolution timed out".to_string())),
+        };
 
         // 3. Stats
         let elapsed = start.elapsed();
