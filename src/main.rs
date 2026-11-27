@@ -226,6 +226,10 @@ struct Cli {
     #[arg(long)]
     persist_cache: bool,
 
+    /// Self-monitor: exit if the resolver stops responding (supervisor restarts it)
+    #[arg(long)]
+    watchdog: bool,
+
     /// Enable Prometheus metrics
     #[arg(long)]
     metrics: bool,
@@ -276,6 +280,7 @@ fn main() {
         api_bind: cli.api_bind.clone(),
         user: cli.user.clone(),
         persist_cache: cli.persist_cache,
+        watchdog: cli.watchdog,
         metrics: cli.metrics,
     });
 
@@ -427,6 +432,7 @@ fn main() {
     // User to drop privileges to after binding privileged ports (optional).
     let run_as_user = config.user.clone();
     let persist = config.persist_cache;
+    let watchdog = config.watchdog;
 
     // Create tokio runtime
     let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
@@ -529,6 +535,31 @@ fn main() {
         let tcp_addr: SocketAddr = server_config.bind_addr;
         let mut tcp_handle =
             tokio::spawn(async move { run_tcp_server(tcp_addr, tcp_resolver, tcp_prebound).await });
+
+        // Watchdog: exit(1) if the resolver stops responding so the supervisor
+        // (launchd / Windows service recovery) restarts it. SERVFAIL counts as
+        // alive; only true silence (3 consecutive timeouts) triggers a restart.
+        if watchdog {
+            let wd_addr = server_config.bind_addr;
+            tokio::spawn(async move {
+                let mut fails = 0u32;
+                loop {
+                    tokio::time::sleep(Duration::from_secs(30)).await;
+                    if crate::health::probe_alive(wd_addr).await {
+                        fails = 0;
+                    } else {
+                        fails += 1;
+                        tracing::warn!("watchdog: no response from {} ({}/3)", wd_addr, fails);
+                        if fails >= 3 {
+                            error!(
+                                "watchdog: resolver unresponsive — exiting for supervisor restart"
+                            );
+                            std::process::exit(1);
+                        }
+                    }
+                }
+            });
+        }
 
         // Wait for shutdown signal (Unix: SIGINT/SIGTERM, Windows: Ctrl+C)
         let cancel = cancel_flag.clone();
@@ -945,6 +976,9 @@ fn generate_plist(config: &FastDnsConfig, plist_path: &str) -> Result<(), String
 
     if config.dnssec {
         args.push("--dnssec".to_string());
+    }
+    if config.watchdog {
+        args.push("--watchdog".to_string());
     }
     if config.ipv6 {
         args.push("--ipv6".to_string());

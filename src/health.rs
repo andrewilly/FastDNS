@@ -4,6 +4,36 @@ use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 use tokio::net::UdpSocket;
 
+/// Liveness probe for the watchdog: true if the server answered at all (any
+/// RCODE) within 2s. Only true silence counts as "wedged" — a SERVFAIL reply
+/// (e.g. upstream outage) still counts as alive, avoiding false restarts.
+pub async fn probe_alive(bind_addr: SocketAddr) -> bool {
+    let socket = match UdpSocket::bind("0.0.0.0:0").await {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    let msg = Message {
+        header: Header::new_query(0x5a5a, true),
+        questions: vec![Question::new("google.com", 1, 1).unwrap()],
+        answers: vec![],
+        authorities: vec![],
+        additionals: vec![],
+    };
+    let mut buf = [0u8; MAX_UDP_PAYLOAD];
+    let len = match msg.to_bytes(&mut buf) {
+        Ok(l) => l,
+        Err(_) => return false,
+    };
+    if socket.send_to(&buf[..len], bind_addr).await.is_err() {
+        return false;
+    }
+    let mut resp = [0u8; MAX_UDP_PAYLOAD];
+    matches!(
+        tokio::time::timeout(Duration::from_secs(2), socket.recv_from(&mut resp)).await,
+        Ok(Ok(_))
+    )
+}
+
 /// Outcome of a health check, with a human-readable detail line.
 pub struct HealthReport {
     /// Whether the resolver answered with NOERROR.

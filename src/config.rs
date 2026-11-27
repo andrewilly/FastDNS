@@ -109,6 +109,9 @@ pub struct FastDnsConfig {
     /// Persist the DNS cache to disk for a warm start on restart (opt-in).
     pub persist_cache: bool,
 
+    /// Self-monitor: exit(1) if the resolver stops responding (supervisor restarts it).
+    pub watchdog: bool,
+
     /// Path to TLS certificate for DoT
     pub tls_cert: String,
 
@@ -155,6 +158,7 @@ impl Default for FastDnsConfig {
             metrics: false,
             user: None,
             persist_cache: false,
+            watchdog: false,
             tls_cert: String::new(),
             tls_key: String::new(),
             dnssec_policy: "ad".to_string(),
@@ -245,6 +249,9 @@ impl FastDnsConfig {
         }
         if cli.persist_cache {
             self.persist_cache = true;
+        }
+        if cli.watchdog {
+            self.watchdog = true;
         }
     }
 
@@ -355,6 +362,7 @@ pub struct CliOverrides {
     pub metrics: bool,
     pub user: Option<String>,
     pub persist_cache: bool,
+    pub watchdog: bool,
 }
 
 /// Domains to pre-fetch at startup (~500 top domains).

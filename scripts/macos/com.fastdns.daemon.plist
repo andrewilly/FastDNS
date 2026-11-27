@@ -17,6 +17,7 @@
         <string>127.0.0.1:53</string>
         <string>-c</string>
         <string>50000</string>
+        <string>--watchdog</string>
     </array>
 
     <!-- Keep the process alive: restart only if it crashes/exits abnormally -->
